@@ -8,9 +8,10 @@ import { signed } from "@/lib/format";
 type Props = {
   markets: Market[];
   selectedId: string;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, meta: boolean) => void;
   now: number;
   latestEvent?: TransitEvent;
+  watchlistIds?: readonly string[];
 };
 
 export default function MarketsList({
@@ -19,11 +20,17 @@ export default function MarketsList({
   onSelect,
   now,
   latestEvent,
+  watchlistIds,
 }: Props) {
+  const watchlistSet = new Set(watchlistIds ?? []);
+  const subtitle =
+    watchlistSet.size > 0
+      ? `${markets.length} · ${watchlistSet.size} pinned`
+      : `${markets.length}`;
   return (
     <Panel
       title="Markets"
-      subtitle={`${markets.length}`}
+      subtitle={subtitle}
       bodyClassName="p-0"
     >
       <ul className="divide-y divide-[var(--color-panel-border)]">
@@ -32,6 +39,7 @@ export default function MarketsList({
           const fair = m.forecastProb * 100;
           const edge = fair - mid;
           const selected = m.id === selectedId;
+          const pinned = watchlistSet.has(m.id);
           const sinceImpact = now - m.lastImpactTs;
           const flash = m.lastImpactTs > 0 && sinceImpact < 1400;
           const impactedByLatest =
@@ -43,12 +51,14 @@ export default function MarketsList({
           return (
             <li
               key={m.id}
-              onClick={() => onSelect(m.id)}
+              onClick={(e) => onSelect(m.id, e.metaKey || e.ctrlKey)}
               className={clsx(
                 "cursor-pointer px-2.5 py-1.5 transition-colors",
                 selected
                   ? "border-l-2 border-[var(--color-accent)] bg-[#0f1722]"
-                  : "border-l-2 border-transparent hover:bg-[#0e141c]",
+                  : pinned
+                    ? "border-l-2 border-[var(--color-warn)] bg-[#0c1218] hover:bg-[#0e141c]"
+                    : "border-l-2 border-transparent hover:bg-[#0e141c]",
                 flash && "row-flash",
               )}
             >

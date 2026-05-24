@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useMemo } from "react";
 import TopBar from "./TopBar";
 import MarketsList from "./MarketsList";
 import MarketDetail from "./MarketDetail";
@@ -9,6 +10,8 @@ import DecisionPanel from "./DecisionPanel";
 import EventTape from "./EventTape";
 import PnLPanel from "./PnLPanel";
 import { useTrackBookSimulation } from "@/hooks/useTrackBookSimulation";
+import { useTerminalView } from "@/hooks/useTerminalView";
+import { visibleEvents, visiblePositionMarkets } from "@/lib/view";
 
 export default function Terminal() {
   const {
@@ -22,6 +25,48 @@ export default function Terminal() {
     setDataSource,
   } = useTrackBookSimulation();
 
+  const {
+    focusedMarketId,
+    watchlistIds,
+    viewMode,
+    activeIds,
+    handleMarketClick,
+    exitView,
+  } = useTerminalView({
+    currentSelectedId: state.selectedMarketId,
+    onSelectMarket: selectMarket,
+  });
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") exitView();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [exitView]);
+
+  const filteredEvents = useMemo(
+    () => visibleEvents(state.events, viewMode, activeIds),
+    [state.events, viewMode, activeIds],
+  );
+  const positionMarkets = useMemo(
+    () => visiblePositionMarkets(state, viewMode, activeIds),
+    [state, viewMode, activeIds],
+  );
+
+  const focusLabel =
+    viewMode === "focus" && focusedMarketId
+      ? (state.markets[focusedMarketId]?.lineLabel ?? null)
+      : null;
+  const tapeScope =
+    viewMode === "focus" && focusLabel
+      ? `focus · ${focusLabel}`
+      : viewMode === "watchlist"
+        ? `watchlist · ${watchlistIds.length}`
+        : undefined;
+  const pnlScope =
+    viewMode === "watchlist" ? `watchlist · ${watchlistIds.length}` : undefined;
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#050709]">
       <TopBar
@@ -32,6 +77,10 @@ export default function Terminal() {
         onTogglePause={togglePause}
         onReseed={reseed}
         onSetDataSource={setDataSource}
+        viewMode={viewMode}
+        focusLabel={focusLabel}
+        watchlistCount={watchlistIds.length}
+        onExitView={exitView}
       />
 
       <main
@@ -50,9 +99,10 @@ export default function Terminal() {
           <MarketsList
             markets={marketsArr}
             selectedId={state.selectedMarketId}
-            onSelect={selectMarket}
+            onSelect={handleMarketClick}
             now={state.now}
             latestEvent={latestEvent}
+            watchlistIds={watchlistIds}
           />
         </div>
         <div style={{ gridArea: "detail" }} className="min-h-0">
@@ -65,10 +115,18 @@ export default function Terminal() {
           <ForecastPanel market={selected} now={state.now} />
         </div>
         <div style={{ gridArea: "eventtape" }} className="min-h-0">
-          <EventTape events={state.events} markets={state.markets} />
+          <EventTape
+            events={filteredEvents}
+            markets={state.markets}
+            scopeLabel={tapeScope}
+          />
         </div>
         <div style={{ gridArea: "pnl" }} className="min-h-0">
-          <PnLPanel state={state} />
+          <PnLPanel
+            state={state}
+            positionMarkets={positionMarkets}
+            scopeLabel={pnlScope}
+          />
         </div>
         <div style={{ gridArea: "orderbook" }} className="min-h-0">
           <OrderBook market={selected} />

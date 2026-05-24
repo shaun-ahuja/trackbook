@@ -1,22 +1,24 @@
 import type { LineId, Severity, TransitEvent } from "../types";
 import type { NormalizedAlert } from "./types";
 
-// Route → markets. Multiple routes can map to the same market (Lex group,
-// ACE, NQRW). An alert touching several routes unions their markets.
+// Route → market. Each route is its own market contract; the market id
+// equals the route designator.
 const ROUTE_TO_MARKETS: Record<string, string[]> = {
-  L: ["L_DELAY_10_EVE"],
-  "4": ["LEX_MAJOR_PM"],
-  "5": ["LEX_MAJOR_PM"],
-  "6": ["LEX_MAJOR_PM"],
-  A: ["ACE_REROUTE_EXT"],
-  C: ["ACE_REROUTE_EXT"],
-  E: ["ACE_REROUTE_EXT"],
-  "7": ["7_SIGNAL_AM"],
-  N: ["NQRW_QUEENS_PM"],
-  Q: ["NQRW_QUEENS_PM"],
-  R: ["NQRW_QUEENS_PM"],
-  W: ["NQRW_QUEENS_PM"],
+  L: ["L"],
+  "4": ["4"],
+  "5": ["5"],
+  "6": ["6"],
+  A: ["A"],
+  C: ["C"],
+  E: ["E"],
+  "7": ["7"],
+  N: ["N"],
+  Q: ["Q"],
+  R: ["R"],
+  W: ["W"],
 };
+
+const ALL_ROUTE_MARKETS = Object.keys(ROUTE_TO_MARKETS);
 
 const ROUTE_TO_LINE: Record<string, LineId> = {
   L: "L",
@@ -47,9 +49,10 @@ const SEV_IMPACT: Record<Severity, number> = {
 // prior by ~1.5pp rather than ~3-15pp for a live event.
 const PLANNED_IMPACT = 0.015;
 
-// Tiny secondary bleed from a citywide weather alert into market-specific
-// books. Mirrors the WX_CITYWIDE_15 template in events.ts.
-const WX_BLEED = 0.02;
+// Per-route share of a citywide weather alert. Smaller than the raw
+// alert magnitude because weather pressure is distributed across every
+// route market rather than concentrated on one symbol.
+const WX_PER_ROUTE = 0.03;
 
 const WEATHER_RE = /flood|rain|snow|weather|ice|wind|storm|hurricane/i;
 const RECOVERY_RE = /restore|resum|good service|cleared|back to|normal service/i;
@@ -80,15 +83,14 @@ function deriveImpacts(
   const impacts: Record<string, number> = {};
 
   if (isWeather(alert)) {
-    impacts.WX_CITYWIDE_15 = signedMagnitude;
-    // Citywide bleed across the rest of the desk's books.
-    const bleed = Math.sign(signedMagnitude) * Math.min(WX_BLEED, Math.abs(signedMagnitude));
-    if (bleed !== 0) {
-      impacts.LEX_MAJOR_PM = bleed;
-      impacts.L_DELAY_10_EVE = bleed;
-      impacts.ACE_REROUTE_EXT = bleed;
-      impacts["7_SIGNAL_AM"] = bleed;
-      impacts.NQRW_QUEENS_PM = bleed;
+    // Weather hits every route. Scale to a per-route share, capped by the
+    // alert's signed magnitude so a minor weather note doesn't outweigh
+    // the live route impact below.
+    const perRoute =
+      Math.sign(signedMagnitude) *
+      Math.min(WX_PER_ROUTE, Math.abs(signedMagnitude));
+    if (perRoute !== 0) {
+      for (const m of ALL_ROUTE_MARKETS) impacts[m] = perRoute;
     }
   }
 

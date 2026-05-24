@@ -5,7 +5,11 @@ import Panel from "./Panel";
 import type { Market, TransitEvent } from "@/lib/types";
 import { clockHHMMSS } from "@/lib/format";
 
-type Props = { events: TransitEvent[]; markets: Record<string, Market> };
+type Props = {
+  events: TransitEvent[];
+  markets: Record<string, Market>;
+  scopeLabel?: string;
+};
 
 const KIND_LABEL: Record<TransitEvent["kind"], string> = {
   DELAY: "DELAY",
@@ -32,11 +36,14 @@ const LINE_COLORS: Record<string, string> = {
   NQRW: "#FCCC0A",
 };
 
-export default function EventTape({ events, markets }: Props) {
+export default function EventTape({ events, markets, scopeLabel }: Props) {
+  const subtitle = scopeLabel
+    ? `${events.length} · ${scopeLabel}`
+    : `${events.length} events`;
   return (
     <Panel
       title="Event Tape"
-      subtitle={`${events.length} events`}
+      subtitle={subtitle}
       bodyClassName="p-0"
     >
       {events.length === 0 ? (

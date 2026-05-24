@@ -10,13 +10,24 @@ export type EventTemplate = {
   driverTag: string;
 };
 
+function impactRoutes(
+  routes: readonly string[],
+  mag: number,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const r of routes) out[r] = mag;
+  return out;
+}
+
+const ALL_ROUTES = ["L", "4", "5", "6", "A", "C", "E", "7", "N", "Q", "R", "W"] as const;
+
 export const TEMPLATES: EventTemplate[] = [
   {
     line: "L",
     kind: "SIGNAL",
     severity: 2,
     text: "Signal problem at Bedford Av · northbound L holding",
-    impacts: { L_DELAY_10_EVE: 0.09 },
+    impacts: { L: 0.09 },
     driverTag: "Bedford sig",
   },
   {
@@ -24,7 +35,7 @@ export const TEMPLATES: EventTemplate[] = [
     kind: "SICK_PASSENGER",
     severity: 1,
     text: "Sick passenger at Union Sq · L delays minor",
-    impacts: { L_DELAY_10_EVE: 0.04 },
+    impacts: { L: 0.04 },
     driverTag: "Union Sq sick pax",
   },
   {
@@ -32,7 +43,7 @@ export const TEMPLATES: EventTemplate[] = [
     kind: "CLEAR",
     severity: 1,
     text: "Bedford incident clearing · L resuming",
-    impacts: { L_DELAY_10_EVE: -0.07 },
+    impacts: { L: -0.07 },
     driverTag: "L clearing",
   },
   {
@@ -40,7 +51,7 @@ export const TEMPLATES: EventTemplate[] = [
     kind: "DELAY",
     severity: 3,
     text: "Major delay 4·5·6 · disabled train at 86 St",
-    impacts: { LEX_MAJOR_PM: 0.14, "7_SIGNAL_AM": 0.02 },
+    impacts: { "4": 0.14, "5": 0.14, "6": 0.14, "7": 0.02 },
     driverTag: "86 St disabled",
   },
   {
@@ -48,15 +59,23 @@ export const TEMPLATES: EventTemplate[] = [
     kind: "POLICE",
     severity: 2,
     text: "NYPD activity at Grand Central · 4·5 single-tracking",
-    impacts: { LEX_MAJOR_PM: 0.08 },
+    impacts: { "4": 0.08, "5": 0.08 },
     driverTag: "GCT police",
+  },
+  {
+    line: "456",
+    kind: "SICK_PASSENGER",
+    severity: 1,
+    text: "Sick passenger on 6 train at 33 St · holding",
+    impacts: { "6": 0.05 },
+    driverTag: "33 St sick pax",
   },
   {
     line: "456",
     kind: "CLEAR",
     severity: 1,
     text: "Lex Ave service resuming with residual delays",
-    impacts: { LEX_MAJOR_PM: -0.06 },
+    impacts: { "4": -0.06, "5": -0.06, "6": -0.06 },
     driverTag: "Lex resuming",
   },
   {
@@ -64,7 +83,7 @@ export const TEMPLATES: EventTemplate[] = [
     kind: "DELAY",
     severity: 2,
     text: "A train reroute via F line extended through Sunday",
-    impacts: { ACE_REROUTE_EXT: 0.11 },
+    impacts: { A: 0.11 },
     driverTag: "A→F reroute",
   },
   {
@@ -72,15 +91,31 @@ export const TEMPLATES: EventTemplate[] = [
     kind: "SIGNAL",
     severity: 2,
     text: "Signal trouble at Jay St · C/E rerouting",
-    impacts: { ACE_REROUTE_EXT: 0.06 },
+    impacts: { C: 0.06, E: 0.06 },
     driverTag: "Jay St sig",
+  },
+  {
+    line: "ACE",
+    kind: "DELAY",
+    severity: 2,
+    text: "E delays via F at World Trade Center",
+    impacts: { E: 0.09 },
+    driverTag: "WTC E delay",
+  },
+  {
+    line: "ACE",
+    kind: "CLEAR",
+    severity: 1,
+    text: "Jay St signal cleared · C/E normalizing",
+    impacts: { C: -0.05, E: -0.05 },
+    driverTag: "Jay St clear",
   },
   {
     line: "7",
     kind: "SIGNAL",
     severity: 3,
     text: "Signal failure at Queensboro Plaza · 7 service suspended",
-    impacts: { "7_SIGNAL_AM": 0.18 },
+    impacts: { "7": 0.18 },
     driverTag: "QBP signal fail",
   },
   {
@@ -88,7 +123,7 @@ export const TEMPLATES: EventTemplate[] = [
     kind: "RIDERSHIP",
     severity: 1,
     text: "Heavy 7 ridership · Mets game getting out",
-    impacts: { "7_SIGNAL_AM": 0.03 },
+    impacts: { "7": 0.03 },
     driverTag: "Mets crowd",
   },
   {
@@ -96,12 +131,7 @@ export const TEMPLATES: EventTemplate[] = [
     kind: "WEATHER",
     severity: 3,
     text: "NWS flash flood warning · subway systemwide impact possible",
-    impacts: {
-      WX_CITYWIDE_15: 0.16,
-      LEX_MAJOR_PM: 0.04,
-      "7_SIGNAL_AM": 0.03,
-      L_DELAY_10_EVE: 0.03,
-    },
+    impacts: impactRoutes(ALL_ROUTES, 0.05),
     driverTag: "flash flood",
   },
   {
@@ -109,7 +139,7 @@ export const TEMPLATES: EventTemplate[] = [
     kind: "WEATHER",
     severity: 2,
     text: "Heavy rain over Manhattan · station flooding reports",
-    impacts: { WX_CITYWIDE_15: 0.08 },
+    impacts: impactRoutes(ALL_ROUTES, 0.025),
     driverTag: "heavy rain",
   },
   {
@@ -117,7 +147,7 @@ export const TEMPLATES: EventTemplate[] = [
     kind: "CLEAR",
     severity: 1,
     text: "Rain easing · MTA downgrades weather advisory",
-    impacts: { WX_CITYWIDE_15: -0.06 },
+    impacts: impactRoutes(ALL_ROUTES, -0.02),
     driverTag: "rain easing",
   },
   {
@@ -125,7 +155,7 @@ export const TEMPLATES: EventTemplate[] = [
     kind: "DELAY",
     severity: 2,
     text: "N/W delays · switch problem at Queensboro Plaza",
-    impacts: { NQRW_QUEENS_PM: 0.1 },
+    impacts: { N: 0.1, W: 0.1 },
     driverTag: "QBP switch",
   },
   {
@@ -133,15 +163,23 @@ export const TEMPLATES: EventTemplate[] = [
     kind: "SICK_PASSENGER",
     severity: 1,
     text: "Sick passenger on Q train at 57 St · holding",
-    impacts: { NQRW_QUEENS_PM: 0.04 },
+    impacts: { Q: 0.05 },
     driverTag: "57 St sick pax",
+  },
+  {
+    line: "NQRW",
+    kind: "DELAY",
+    severity: 2,
+    text: "R local delays at Bay Ridge · switch trouble",
+    impacts: { R: 0.08 },
+    driverTag: "Bay Ridge R",
   },
   {
     line: "NQRW",
     kind: "CLEAR",
     severity: 1,
     text: "Queensboro switch resolved · N/W normalizing",
-    impacts: { NQRW_QUEENS_PM: -0.07 },
+    impacts: { N: -0.07, W: -0.07 },
     driverTag: "QBP normal",
   },
 ];

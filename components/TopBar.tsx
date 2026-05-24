@@ -3,6 +3,7 @@
 import clsx from "clsx";
 import { clockHHMMSS } from "@/lib/format";
 import type { DataSourceMode } from "@/lib/types";
+import type { ViewMode } from "@/lib/view";
 
 type Props = {
   now: number;
@@ -12,6 +13,10 @@ type Props = {
   onTogglePause: () => void;
   onReseed: () => void;
   onSetDataSource: (mode: DataSourceMode) => void;
+  viewMode: ViewMode;
+  focusLabel: string | null;
+  watchlistCount: number;
+  onExitView: () => void;
 };
 
 const MODE_LABEL: Record<DataSourceMode, string> = {
@@ -30,7 +35,23 @@ export default function TopBar({
   onTogglePause,
   onReseed,
   onSetDataSource,
+  viewMode,
+  focusLabel,
+  watchlistCount,
+  onExitView,
 }: Props) {
+  const viewChip =
+    viewMode === "desk"
+      ? "DESK"
+      : viewMode === "focus"
+        ? `FOCUS · ${focusLabel ?? ""}`.trim()
+        : `WATCHLIST · ${watchlistCount} MKTS`;
+  const viewTone =
+    viewMode === "desk"
+      ? "text-[var(--color-muted)]"
+      : viewMode === "focus"
+        ? "text-[var(--color-accent)]"
+        : "text-[var(--color-warn)]";
   return (
     <header className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-panel-border)] bg-[#080b10] px-3">
       <div className="flex items-center gap-3">
@@ -82,6 +103,28 @@ export default function TopBar({
               </button>
             );
           })}
+        </div>
+        <div className="flex items-center gap-1.5 rounded-[1px] border border-[var(--color-panel-border)] bg-[var(--color-panel)] px-1.5 py-0.5">
+          <span className="text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)]">
+            view
+          </span>
+          <span
+            className={clsx(
+              "text-[9px] font-bold uppercase tracking-[0.22em]",
+              viewTone,
+            )}
+          >
+            {viewChip}
+          </span>
+          {viewMode !== "desk" && (
+            <button
+              onClick={onExitView}
+              className="ml-0.5 rounded-[1px] border border-[var(--color-panel-border)] px-1 py-px text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+              title="Return to desk view (Esc)"
+            >
+              Desk
+            </button>
+          )}
         </div>
       </div>
 

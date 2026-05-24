@@ -1,6 +1,7 @@
 import type { Severity, TransitEvent } from "../types";
 import type { RouteAggregate, RouteSeverity } from "./aggregateTripSignals";
 import {
+  TRIP_MONITORED_ROUTES,
   TRIP_ROUTE_TO_LINE,
   TRIP_ROUTE_TO_MARKETS,
 } from "./trips/feedGroups";
@@ -16,9 +17,20 @@ const SEV_IMPACT: Record<1 | 2 | 3, number> = {
   3: 0.12,
 };
 
-// Cross-route degradation signal — WX_CITYWIDE_15 catches this. Small,
-// because it duplicates the per-route pressure that's already firing.
-const WIDESPREAD_IMPACT = 0.06;
+// Cross-route degradation signal — small per-route share spread across
+// every monitored route. Stays small because it duplicates per-route
+// pressure that's already firing.
+const WIDESPREAD_PER_ROUTE = 0.015;
+
+function widespreadImpacts(mag: number): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const route of TRIP_MONITORED_ROUTES) {
+    const markets = TRIP_ROUTE_TO_MARKETS[route.toUpperCase()];
+    if (!markets) continue;
+    for (const m of markets) out[m] = mag;
+  }
+  return out;
+}
 
 // Routes for which an upgrade should land as a SIGNAL rather than a
 // DELAY (stalled lines often mean signal trouble). Picked by feel; the
@@ -108,7 +120,7 @@ export function widespreadDegradationEvent(
       kind: "DELAY",
       severity: 2,
       text: `Trip aggregator: widespread degradation across ${degradedCount} routes`,
-      impacts: { WX_CITYWIDE_15: WIDESPREAD_IMPACT },
+      impacts: widespreadImpacts(WIDESPREAD_PER_ROUTE),
       source: "trip",
       category: "live",
     };
@@ -120,7 +132,7 @@ export function widespreadDegradationEvent(
     kind: "CLEAR",
     severity: 1,
     text: `Trip aggregator: citywide trip flow normalizing`,
-    impacts: { WX_CITYWIDE_15: -WIDESPREAD_IMPACT },
+    impacts: widespreadImpacts(-WIDESPREAD_PER_ROUTE),
     source: "trip",
     category: "live",
   };

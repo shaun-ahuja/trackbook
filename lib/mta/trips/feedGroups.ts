@@ -4,7 +4,7 @@ import type { LineId } from "../../types";
 // feeds whose routes back at least one of our markets.
 //
 // Numbered feed (the default URL) serves 1/2/3/4/5/6/7/S. We pull it
-// for the 4/5/6 (LEX_MAJOR_PM) and 7 (7_SIGNAL_AM) markets.
+// for the 4/5/6/7 route markets.
 //
 // L, ACE, NQRW each have their own feed.
 export type TripFeedGroup = {
@@ -43,22 +43,21 @@ export const TRIP_MONITORED_ROUTES: string[] = TRIP_FEED_GROUPS.flatMap(
   (g) => g.routes,
 );
 
-// Route → market(s) the trip aggregate should impact. Mirrors the
-// ROUTE_TO_MARKETS map in mapMtaAlertToTransitEvent.ts but kept local so
-// the trip layer can evolve independently.
+// Route → market(s) the trip aggregate should impact. Each route is its
+// own market; ids match the route designators.
 export const TRIP_ROUTE_TO_MARKETS: Record<string, string[]> = {
-  L: ["L_DELAY_10_EVE"],
-  "4": ["LEX_MAJOR_PM"],
-  "5": ["LEX_MAJOR_PM"],
-  "6": ["LEX_MAJOR_PM"],
-  A: ["ACE_REROUTE_EXT"],
-  C: ["ACE_REROUTE_EXT"],
-  E: ["ACE_REROUTE_EXT"],
-  "7": ["7_SIGNAL_AM"],
-  N: ["NQRW_QUEENS_PM"],
-  Q: ["NQRW_QUEENS_PM"],
-  R: ["NQRW_QUEENS_PM"],
-  W: ["NQRW_QUEENS_PM"],
+  L: ["L"],
+  "4": ["4"],
+  "5": ["5"],
+  "6": ["6"],
+  A: ["A"],
+  C: ["C"],
+  E: ["E"],
+  "7": ["7"],
+  N: ["N"],
+  Q: ["Q"],
+  R: ["R"],
+  W: ["W"],
 };
 
 export const TRIP_ROUTE_TO_LINE: Record<string, LineId> = {

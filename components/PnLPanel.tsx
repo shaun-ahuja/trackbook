@@ -6,15 +6,20 @@ import type { Market, SimState } from "@/lib/types";
 import { signed, signedDollars } from "@/lib/format";
 import { totalInventoryNotional, totalPnl } from "@/lib/simulation/pnl";
 
-type Props = { state: SimState };
+type Props = {
+  state: SimState;
+  positionMarkets?: Market[];
+  scopeLabel?: string;
+};
 
-export default function PnLPanel({ state }: Props) {
+export default function PnLPanel({ state, positionMarkets, scopeLabel }: Props) {
   const pnl = totalPnl(state);
   const notional = totalInventoryNotional(state);
-  const markets: Market[] = state.marketOrder.map((id) => state.markets[id]);
+  const markets: Market[] =
+    positionMarkets ?? state.marketOrder.map((id) => state.markets[id]);
 
   return (
-    <Panel title="Book · PnL" subtitle="paper">
+    <Panel title="Book · PnL" subtitle={scopeLabel ?? "paper"}>
       <div className="grid grid-cols-2 gap-1.5">
         <Stat
           label="total pnl"
