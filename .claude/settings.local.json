@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(curl -sS -o /tmp/tb.html -w \"HTTP %{http_code} bytes=%{size_download}\\\\n\" http://localhost:3000)",
+      "Read(//tmp/**)",
+      "Bash(curl *)"
+    ]
+  }
+}
