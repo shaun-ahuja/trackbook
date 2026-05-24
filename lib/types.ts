@@ -112,6 +112,62 @@ export type Market = {
   // decay each tick — drains only when the originating alert clears.
   // Bounded ±0.2 so scheduled risk never dominates live news.
   scheduledRisk: number;
+  // Hidden ground-truth probability the synthetic counterparties trade against.
+  // forecastProb is the desk's noisy lagging estimate; trueProb is the truth
+  // only informed/latency-arb archetypes see (with their own noise).
+  trueProb: number;
+  // Per-market microstructure regime. Persists across many ticks; drives
+  // archetype mix and quote-update cadence.
+  regimeState: MarketRegimeState;
+  // EWMA of liquidity-provider arrivals — feeds order-book depth display
+  // and the Kyle-style impact denominator.
+  lpDepth: number;
+  // Short bucketed string explaining what drove (or didn't drive) market
+  // movement this tick. Distinct from lastActionReason (the desk's reason).
+  flowReason: string;
+  flowReasonKey: string;
+  // Tick at which flowReason last refreshed — used for a min-dwell gate
+  // so the displayed text doesn't churn every flow bucket transition.
+  flowReasonTick: number;
+  // Ring buffer of the last few archetype dispatches for this market.
+  // Rendered in MarketDetail as a "flow log" — disambiguates emergent moves.
+  flowLog: FlowEvent[];
+  // Edge/conf snapshots at the last posture flip — used by the evidence-delta
+  // hysteresis layer to suppress marginal flips.
+  lastEdgeAtFlip: number;
+  lastConfAtFlip: number;
+};
+
+export type TraderArchetype =
+  | "noise"
+  | "liquidity_provider"
+  | "event_follower"
+  | "inventory_rebalancer"
+  | "momentum"
+  | "mean_reversion"
+  | "patient_value"
+  | "informed_transit"
+  | "latency_arb"
+  | "panic"
+  | "desk_actor";
+
+export type MarketRegime = "calm" | "alert" | "shock" | "recovery";
+
+export type MarketRegimeState = {
+  regime: MarketRegime;
+  enteredTick: number;
+  // EWMA of |Δforecast| over ~6 ticks. Drives calm→alert and exit thresholds.
+  shortAbsDelta: number;
+  ticksSinceEvent: number;
+  ticksSinceShock: number;
+};
+
+export type FlowEvent = {
+  tick: number;
+  archetype: TraderArchetype;
+  side: "BUY" | "SELL" | "LIMIT_BID" | "LIMIT_ASK";
+  qty: number;
+  priceCents: number;
 };
 
 export const INVENTORY_LIMIT = 8;

@@ -280,6 +280,21 @@ function makeInitialMarket(spec: MarketSpec): Market {
     book: emptyBook(mid),
     recentImpact: 0,
     scheduledRisk: 0,
+    trueProb: prob,
+    regimeState: {
+      regime: "calm",
+      enteredTick: 0,
+      shortAbsDelta: 0,
+      ticksSinceEvent: 999,
+      ticksSinceShock: 999,
+    },
+    lpDepth: 5,
+    flowReason: "",
+    flowReasonKey: "",
+    flowReasonTick: 0,
+    flowLog: [],
+    lastEdgeAtFlip: 0,
+    lastConfAtFlip: 0.55,
   };
 }
 

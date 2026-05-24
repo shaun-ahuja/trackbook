@@ -4,14 +4,11 @@ import {
   type MarketAction,
   type RiskPosture,
 } from "../types";
-import { gaussian } from "../rng";
 import { clamp } from "../format";
-
-const HISTORY_LEN = 60;
 
 // Decision-engine tuning. Hysteresis + cooldowns so actions persist long
 // enough to read and small noise can't flip the posture every tick.
-const MIN_HOLD_TICKS = 12;            // ~9s at 750ms tick — postures persist
+const MIN_HOLD_TICKS = 25;            // ~19s at 750ms tick — postures persist
 const FLATTEN_EXIT_INV = INVENTORY_LIMIT - 3; // hysteretic flatten exit (5)
 
 // Edge thresholds in cents. Asymmetric so a posture sticks even as edge
@@ -22,48 +19,20 @@ const CONF_ENTER = 0.62;
 const CONF_EXIT = 0.5;
 const WIDEN_EDGE_BAND = 1.5;          // |edge| inside which WIDEN is sticky
 const CONVICTION_ENTER = 2.4;         // |edge| × conf gate for LIFT/HIT entry
-const HIGH_VOL = 1.25;                // EWMA |Δmid| above which we lean WIDEN
-const VOL_ALPHA = 0.12;               // EWMA smoothing on realised vol
+const HIGH_VOL = 0.6;                 // EWMA |Δmid| above which we lean WIDEN
 
-export function moveSyntheticMarket(
-  market: Market,
-  seed: number,
-  volMultiplier = 1,
-): { market: Market; seed: number } {
-  const fair = market.forecastProb * 100;
-  // Self-heal if hot-reload left non-finite prices in state.
-  const safeBid = Number.isFinite(market.marketBid) ? market.marketBid : fair - 2;
-  const safeAsk = Number.isFinite(market.marketAsk) ? market.marketAsk : fair + 2;
-  const mid = (safeBid + safeAsk) / 2;
-  const drift = 0.06 * (fair - mid);
-  const g = gaussian(seed);
-  const newMid = clamp(mid + drift + g.v * 0.65 * volMultiplier, 1, 99);
+// Evidence-delta hysteresis. Tightened: the desk needs a substantial
+// signal shift since the last flip to override the min-hold lockout.
+// The explicit early-flip carve-outs below (very large edge, fresh shock,
+// inventory breach via FLATTEN) handle the cases where waiting hurts.
+const EVIDENCE_DELTA_THRESHOLD = 4.0;
+const CONF_DELTA_WEIGHT = 50;
 
-  // EWMA realised vol on |Δmid|. Half-life ≈ 5 ticks with α=0.12.
-  // Guard against stale hot-reload state where `vol` may be undefined.
-  const prevVol = Number.isFinite(market.vol) ? market.vol : 0.5;
-  const newVol = (1 - VOL_ALPHA) * prevVol + VOL_ALPHA * Math.abs(newMid - mid);
-
-  // Spread widens with low confidence AND with realised vol so volatile
-  // ticks naturally pull the synthetic touch apart.
-  const baseSpread = 2 + (1 - market.confidence) * 3 + Math.min(newVol, 3) * 0.6;
-  const spread = clamp(baseSpread, 1.5, 9);
-  const half = spread / 2;
-  const newBid = clamp(newMid - half, 1, 98);
-  const newAsk = clamp(newMid + half, newBid + 0.5, 99);
-
-  const history = [...market.priceHistory, newMid].slice(-HISTORY_LEN);
-  return {
-    market: {
-      ...market,
-      marketBid: newBid,
-      marketAsk: newAsk,
-      priceHistory: history,
-      vol: newVol,
-    },
-    seed: g.seed,
-  };
-}
+// Carve-outs that allow the posture to flip before MIN_HOLD_TICKS expires.
+// Inventory breach is handled separately — it forces candidate=FLATTEN
+// and FLATTEN already bypasses the lock.
+const VERY_LARGE_EDGE = EDGE_ENTER * 2;        // ≥7¢ dislocation
+const VERY_LARGE_EDGE_CONF = 0.65;
 
 type DecisionOut = {
   market: Market;
@@ -98,13 +67,33 @@ export function decide(
   const breach = inv > INVENTORY_LIMIT || inv < -INVENTORY_LIMIT;
   if (breach) candidate = "FLATTEN";
 
-  // 3) Min-hold lockout: don't change posture too soon, except for FLATTEN.
+  // 3) Flip gate. A posture flip is allowed when ANY of:
+  //      - min-hold lockout has expired (default path)
+  //      - very large edge with strong conf (mispricing too big to wait out)
+  //      - a fresh shock landed on this market this tick
+  //      - enough evidence has accumulated since the last flip (rare —
+  //        threshold raised so this only triggers on big shifts)
+  //    FLATTEN can always engage or exit (inventory breach path).
   let action: MarketAction = candidate;
   const ticksSinceDecision = currentTick - market.lastDecisionTick;
+  const lastEdge = Number.isFinite(market.lastEdgeAtFlip)
+    ? market.lastEdgeAtFlip
+    : edge;
+  const lastConf = Number.isFinite(market.lastConfAtFlip)
+    ? market.lastConfAtFlip
+    : conf;
+  const evidenceDelta =
+    Math.abs(edge - lastEdge) + CONF_DELTA_WEIGHT * Math.abs(conf - lastConf);
+  const veryLargeEdge =
+    Math.abs(edge) >= VERY_LARGE_EDGE && conf >= VERY_LARGE_EDGE_CONF;
+  const freshShock = market.lastImpactTs === now;
+  const flipAllowed =
+    ticksSinceDecision >= MIN_HOLD_TICKS ||
+    evidenceDelta >= EVIDENCE_DELTA_THRESHOLD ||
+    veryLargeEdge ||
+    freshShock;
   const lockActive =
-    ticksSinceDecision < MIN_HOLD_TICKS &&
-    prev !== "FLATTEN" &&
-    candidate !== "FLATTEN";
+    !flipAllowed && prev !== "FLATTEN" && candidate !== "FLATTEN";
   if (lockActive && candidate !== prev) {
     action = prev;
   }
@@ -127,10 +116,13 @@ export function decide(
 
   const riskPosture = computeRiskPosture(inv, conf);
 
-  // 6) Track decision tick. Only update if posture actually changed —
-  //    otherwise the lock would never expire.
+  // 6) Track decision tick + last-flip snapshots. Only update on actual
+  //    posture changes — otherwise the lock never expires and the
+  //    evidence-delta gate would also stay frozen.
   const postureChanged = action !== prev;
   const lastDecisionTick = postureChanged ? currentTick : market.lastDecisionTick;
+  const lastEdgeAtFlip = postureChanged ? edge : lastEdge;
+  const lastConfAtFlip = postureChanged ? conf : lastConf;
 
   const next: Market = {
     ...market,
@@ -143,6 +135,8 @@ export function decide(
     narrativeKey: key,
     riskPosture,
     lastDecisionTick,
+    lastEdgeAtFlip,
+    lastConfAtFlip,
   };
 
   return { market: next, action };

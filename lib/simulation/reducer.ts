@@ -1,10 +1,12 @@
-import type { Market, SimAction, SimState, TransitEvent } from "../types";
+import type { Fill, Market, SimAction, SimState, TransitEvent } from "../types";
 import { makeInitialState } from "./markets";
-import { tickEvents, VOL_SPIKE_MULTIPLIER } from "./events";
+import { tickEvents } from "./events";
 import { applyEventToMarket, driftForecast } from "./forecast";
-import { decide, moveSyntheticMarket } from "./marketMaker";
+import { decide } from "./marketMaker";
 import { buildOrderBook } from "./orderBook";
-import { applyFill, generateFill, markAdverseSelection } from "./fills";
+import { applyFill, generateShockFill, markAdverseSelection } from "./fills";
+import { stepRegime } from "./microstructure/regimeFsm";
+import { flowTick } from "./microstructure/flow";
 
 const MAX_EVENTS = 80;
 const MAX_FILLS = 40;
@@ -40,25 +42,43 @@ function injectEvents(state: SimState, incoming: TransitEvent[]): SimState {
 
   const newMarkets: SimState["markets"] = { ...state.markets };
   let sawMta = false;
+  // Track the largest |impact| any event in this batch placed on each
+  // market, so we can step the regime FSM with the right magnitude
+  // (a sev-3 INF arriving via injection must still trigger shock).
+  const maxImpactByMarket: Record<string, number> = {};
 
   for (const ev of incoming) {
     if (ev.source === "mta") sawMta = true;
     for (const id of state.marketOrder) {
-      if (ev.impacts[id] === undefined) continue;
+      const delta = ev.impacts[id];
+      if (delta === undefined) continue;
       newMarkets[id] = applyEventToMarket(newMarkets[id], ev);
+      const mag = Math.abs(delta);
+      if (mag > (maxImpactByMarket[id] ?? 0)) {
+        maxImpactByMarket[id] = mag;
+      }
     }
-    // Rebuild the visible book against the freshly impacted state so the
-    // ladder reflects the shock immediately.
   }
 
-  // Refresh order books once per inject batch.
+  // Step regime + refresh derived fields once per inject batch.
   for (const id of state.marketOrder) {
     const m: Market = newMarkets[id];
-    const mid = (m.marketBid + m.marketAsk) / 2;
+    const impactMag = maxImpactByMarket[id] ?? 0;
+    let updated = m;
+    if (impactMag > 0) {
+      const forecastAbsDelta = Math.abs(
+        (m.forecastProb ?? 0) - (m.prevForecastProb ?? m.forecastProb ?? 0),
+      );
+      updated = {
+        ...m,
+        regimeState: stepRegime(m, forecastAbsDelta, impactMag, state.tick),
+      };
+    }
+    const mid = (updated.marketBid + updated.marketAsk) / 2;
     newMarkets[id] = {
-      ...m,
-      unrealizedPnl: m.inventory * (mid - m.avgCost),
-      book: buildOrderBook(m, state.tick),
+      ...updated,
+      unrealizedPnl: updated.inventory * (mid - updated.avgCost),
+      book: buildOrderBook(updated, state.tick),
     };
   }
 
@@ -96,7 +116,6 @@ function tick(state: SimState, now: number): SimState {
   seed = evGen.seed;
   const newEvent = evGen.event;
   const newRegime = evGen.regime;
-  const volMult = newRegime.volSpikeTicksRemaining > 0 ? VOL_SPIKE_MULTIPLIER : 1;
 
   const events = newEvent
     ? [newEvent, ...state.events].slice(0, MAX_EVENTS)
@@ -106,26 +125,65 @@ function tick(state: SimState, now: number): SimState {
   const newMarkets: SimState["markets"] = { ...state.markets };
 
   for (const id of state.marketOrder) {
-    // Snapshot — shock fills execute against the pre-shock resting quote.
+    // Snapshot — shock fills execute against the pre-flow resting quote.
     const prev = newMarkets[id];
     let m = prev;
 
+    // 1) Apply event to truth channels (recentImpact / scheduledRisk /
+    //    trueProb). forecastProb is NOT bumped here — it catches up via
+    //    driftForecast's Kalman step.
+    let eventImpactMag = 0;
     if (newEvent && newEvent.impacts[id] !== undefined) {
+      eventImpactMag = Math.abs(newEvent.impacts[id]);
       m = applyEventToMarket(m, newEvent);
     }
 
+    // 2) Step per-market regime FSM. Uses last tick's |Δforecast| (the
+    //    forecast hasn't drifted yet this tick, so prevForecastProb is
+    //    still the previous-tick value).
+    const forecastAbsDelta = Math.abs(
+      (m.forecastProb ?? 0) - (m.prevForecastProb ?? m.forecastProb ?? 0),
+    );
+    const nextRegimeState = stepRegime(
+      m,
+      forecastAbsDelta,
+      eventImpactMag,
+      nextTick,
+    );
+    m = { ...m, regimeState: nextRegimeState };
+
+    // 3) Run trader flow against the resting book. Mutates bid/ask via
+    //    Kyle impact, emits fills (passive via walk-the-desk, aggressive/
+    //    flatten via desk_actor), refreshes flowLog + flowReason, updates
+    //    vol and priceHistory. Uses LAST tick's decision posture — decide
+    //    runs after flow to update the posture for the next tick.
+    const flow = flowTick({
+      market: m,
+      seed,
+      currentTick: nextTick,
+      now,
+      regime: m.regimeState.regime,
+      decision: m.lastAction,
+      eventImpactMag,
+    });
+    m = flow.market;
+    seed = flow.seed;
+    const tickFills: Fill[] = [...flow.fills];
+
+    // 4) Drift forecast. With new regime in hand, Kalman α widens in
+    //    shock to keep up. Updates confidence as a tracking-error EWMA.
     const drift = driftForecast(m, seed);
     m = drift.market;
     seed = drift.seed;
 
-    const moved = moveSyntheticMarket(m, seed, volMult);
-    m = moved.market;
-    seed = moved.seed;
-
+    // 5) Decide posture + quote based on the freshly-drifted forecast
+    //    against the freshly-moved synthetic mid.
     const dec = decide(m, now, nextTick);
     m = dec.market;
 
-    const fillGen = generateFill({
+    // 6) Shock fill check — preserved standalone branch so a sev-3 live
+    //    event executes against the stale pre-flow quote.
+    const shockGen = generateShockFill({
       prev,
       cur: m,
       action: dec.action,
@@ -134,23 +192,30 @@ function tick(state: SimState, now: number): SimState {
       currentTick: nextTick,
       seed,
     });
-    seed = fillGen.seed;
-    if (fillGen.fill) {
-      m = applyFill(m, fillGen.fill);
-      m = { ...m, lastFillTick: nextTick };
-      newFills.unshift(fillGen.fill);
-    }
+    seed = shockGen.seed;
+    if (shockGen.fill) tickFills.push(shockGen.fill);
 
-    // Recompute unrealized PnL after any fill + price move this tick.
+    // 7) Apply all fills generated this tick (flow fills first, then
+    //    shock). lastFillTick advances only if at least one cleared.
+    let hadFill = false;
+    for (const fill of tickFills) {
+      m = applyFill(m, fill);
+      hadFill = true;
+      newFills.unshift(fill);
+    }
+    if (hadFill) m = { ...m, lastFillTick: nextTick };
+
+    // 8) Recompute unrealized PnL against the post-flow mid.
     const midNow = (m.marketBid + m.marketAsk) / 2;
     m = { ...m, unrealizedPnl: m.inventory * (midNow - m.avgCost) };
 
+    // 9) Refresh visible order book — sizes now scale off m.lpDepth.
     m = { ...m, book: buildOrderBook(m, nextTick) };
     newMarkets[id] = m;
   }
 
-  // Adverse-selection sweep: flag passive fills whose mark has moved against
-  // the desk over the lookback window.
+  // Adverse-selection sweep: flag passive fills whose mark has moved
+  // against the desk over the lookback window.
   newFills = markAdverseSelection(newFills, newMarkets, nextTick);
   const fills = newFills.slice(0, MAX_FILLS);
 

@@ -20,41 +20,46 @@ export function emptyBook(mid: number): OrderBook {
 
 // Deterministic per-(marketId, side, level, epoch) size with a touch-favoring
 // gradient. The epoch index changes every SIZE_EPOCH_TICKS so the ladder
-// shifts in chunks, not every tick.
+// shifts in chunks, not every tick. `lpScale` multiplies the size so
+// LP-heavy regimes show fatter ladders and LP-thin shocks show wisps.
 function levelSize(
   marketId: string,
   side: "bid" | "ask",
   lvl: number,
   epoch: number,
+  lpScale: number,
 ): number {
   const seed =
     marketId.split("").reduce((a, c) => a + c.charCodeAt(0), 0) +
     (side === "bid" ? 17 : 53) +
     lvl * 31 +
     epoch * 7;
-  // Cheap deterministic hash in [0,1).
   const x = Math.sin(seed) * 10000;
   const r = x - Math.floor(x);
-  // Size grows away from the touch — the inside is thin, the back is fat.
   const base = 8 + lvl * 5;
-  return Math.max(3, Math.floor(base + r * 14));
+  return Math.max(2, Math.floor((base + r * 14) * lpScale));
 }
 
 export function buildOrderBook(market: Market, currentTick: number): OrderBook {
   const epoch = Math.floor(currentTick / SIZE_EPOCH_TICKS);
   const askTouch = Math.max(2, Math.ceil(market.marketAsk));
   const bidTouch = Math.min(98, Math.floor(market.marketBid));
+  // LP depth EWMA is centered around ~5–10 baseline; clamp scaling into
+  // [0.3, 1.8] so even an empty book shows a couple of contracts and a
+  // very deep one doesn't dwarf the panel.
+  const rawLp = Number.isFinite(market.lpDepth) ? market.lpDepth : 5;
+  const lpScale = Math.min(1.8, Math.max(0.3, rawLp / 8));
 
   const asks: BookLevel[] = [];
   const bids: BookLevel[] = [];
   for (let i = 0; i < LEVELS; i++) {
     asks.push({
       price: Math.min(99, askTouch + i),
-      size: levelSize(market.id, "ask", i, epoch),
+      size: levelSize(market.id, "ask", i, epoch, lpScale),
     });
     bids.push({
       price: Math.max(1, bidTouch - i),
-      size: levelSize(market.id, "bid", i, epoch),
+      size: levelSize(market.id, "bid", i, epoch, lpScale),
     });
   }
 

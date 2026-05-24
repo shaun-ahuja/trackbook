@@ -3,15 +3,78 @@
 import clsx from "clsx";
 import Panel from "./Panel";
 import Sparkline from "./Sparkline";
-import type { Market } from "@/lib/types";
+import type { FlowEvent, Market, TraderArchetype } from "@/lib/types";
 import { signed } from "@/lib/format";
+
+const ARCHETYPE_NAME: Record<TraderArchetype, string> = {
+  noise: "Noise",
+  liquidity_provider: "Liquidity provider",
+  event_follower: "Event follower",
+  inventory_rebalancer: "Inventory rebalancer",
+  momentum: "Momentum",
+  mean_reversion: "Mean reversion",
+  patient_value: "Patient value",
+  informed_transit: "Informed transit",
+  latency_arb: "Latency arb",
+  panic: "Panic",
+  desk_actor: "Desk",
+};
+
+const FLOW_LOG_VISIBLE = 6;
+
+// Build the action phrase shown after "<Type> investor". Limit orders are
+// always "adding liquidity"; market orders specialise per archetype so
+// the commentary reads like a tape narrator (informed buys "disruption
+// risk", desk "lifts the offer", panic "panic-sells", etc.).
+function actionPhrase(
+  archetype: TraderArchetype,
+  side: FlowEvent["side"],
+): string {
+  if (side === "LIMIT_BID") return "is adding bid liquidity";
+  if (side === "LIMIT_ASK") return "is adding ask liquidity";
+  if (archetype === "desk_actor") {
+    return side === "BUY" ? "is lifting the offer" : "is hitting the bid";
+  }
+  if (archetype === "informed_transit" || archetype === "latency_arb") {
+    return side === "BUY"
+      ? "is buying disruption risk"
+      : "is selling disruption risk";
+  }
+  if (archetype === "panic") {
+    return side === "BUY" ? "is panic-buying" : "is panic-selling";
+  }
+  if (archetype === "event_follower") {
+    return side === "BUY"
+      ? "is chasing the headline up"
+      : "is chasing the headline down";
+  }
+  if (archetype === "momentum") {
+    return side === "BUY"
+      ? "is chasing the trend up"
+      : "is chasing the trend down";
+  }
+  if (archetype === "mean_reversion") {
+    return side === "BUY" ? "is fading the dip" : "is fading the rip";
+  }
+  return side === "BUY" ? "is buying at market" : "is selling at market";
+}
+
+function flowSideColor(side: FlowEvent["side"]): string {
+  switch (side) {
+    case "BUY":
+    case "LIMIT_BID":
+      return "var(--color-up)";
+    case "SELL":
+    case "LIMIT_ASK":
+      return "var(--color-down)";
+  }
+}
 
 type Props = { market: Market; now: number };
 
 export default function MarketDetail({ market, now }: Props) {
   const mid = (market.marketBid + market.marketAsk) / 2;
   const fair = market.forecastProb * 100;
-  const edge = fair - mid;
   const spread = market.marketAsk - market.marketBid;
   const last = market.priceHistory[market.priceHistory.length - 1] ?? mid;
   const first = market.priceHistory[0] ?? mid;
@@ -60,9 +123,9 @@ export default function MarketDetail({ market, now }: Props) {
         <Metric label="bid · ask" value={`${market.marketBid.toFixed(1)} / ${market.marketAsk.toFixed(1)}`} />
         <Metric label="spread" value={`${spread.toFixed(2)}¢`} />
         <Metric
-          label="edge vs fair"
-          value={`${signed(edge, 2)}¢`}
-          tone={edge > 0.1 ? "up" : edge < -0.1 ? "down" : "muted"}
+          label="tick vol"
+          value={market.vol.toFixed(2)}
+          tone={market.vol > 0.6 ? "down" : "muted"}
         />
       </div>
 
@@ -82,6 +145,38 @@ export default function MarketDetail({ market, now }: Props) {
         </span>
       </div>
       <Sparkline values={market.priceHistory} height={80} className="mt-1 w-full" />
+
+      <div className="mt-3 flex items-center justify-between text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)]">
+        <span>flow · last {FLOW_LOG_VISIBLE}</span>
+        <span className="tab-num">depth ewma {market.lpDepth?.toFixed(1) ?? "—"}</span>
+      </div>
+      {market.flowLog && market.flowLog.length > 0 ? (
+        <ul className="mt-1 space-y-0.5">
+          {market.flowLog.slice(0, FLOW_LOG_VISIBLE).map((e, idx) => (
+            <li
+              key={`${e.tick}-${idx}-${e.archetype}-${e.side}`}
+              className="text-[11px] leading-[1.4]"
+            >
+              <span
+                className="font-semibold text-[var(--color-foreground)]"
+                style={{ color: flowSideColor(e.side) }}
+              >
+                {ARCHETYPE_NAME[e.archetype]}
+              </span>
+              <span className="text-[var(--color-foreground)]">
+                {" "}investor {actionPhrase(e.archetype, e.side)}
+              </span>
+              <span className="tab-num text-[var(--color-muted)]">
+                {" "}· ×{e.qty} @ {e.priceCents.toFixed(1)}¢
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1 text-[11px] text-[var(--color-muted)]">
+          no archetype activity yet
+        </p>
+      )}
     </Panel>
   );
 }

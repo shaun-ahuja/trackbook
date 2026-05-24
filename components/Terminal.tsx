@@ -111,7 +111,7 @@ export default function Terminal() {
           <MarketDetail market={selected} now={state.now} />
         </div>
         <div style={{ gridArea: "decision" }} className="min-h-0">
-          <DecisionPanel market={selected} fills={state.fills} />
+          <DecisionPanel market={selected} fills={state.fills} tick={state.tick} />
         </div>
         <div style={{ gridArea: "forecast" }} className="min-h-0">
           <ForecastPanel market={selected} now={state.now} />

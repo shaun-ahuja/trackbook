@@ -2,10 +2,17 @@
 
 import clsx from "clsx";
 import Panel from "./Panel";
-import { INVENTORY_LIMIT, type Fill, type Market, type MarketAction, type RiskPosture } from "@/lib/types";
+import {
+  INVENTORY_LIMIT,
+  type Fill,
+  type Market,
+  type MarketAction,
+  type MarketRegime,
+  type RiskPosture,
+} from "@/lib/types";
 import { clockHHMMSS, signed } from "@/lib/format";
 
-type Props = { market: Market; fills: Fill[] };
+type Props = { market: Market; fills: Fill[]; tick: number };
 
 const ACTION_STYLES: Record<
   MarketAction,
@@ -54,12 +61,22 @@ const POSTURE_STYLES: Record<RiskPosture, { bg: string; fg: string; label: strin
   WARNING: { bg: "#2d1219", fg: "#ff5a78", label: "RISK · WARNING" },
 };
 
-export default function DecisionPanel({ market, fills }: Props) {
+const REGIME_STYLES: Record<MarketRegime, { bg: string; fg: string }> = {
+  calm: { bg: "#101820", fg: "#7d8a99" },
+  alert: { bg: "#221e0d", fg: "#f5b042" },
+  shock: { bg: "#2d1219", fg: "#ff5a78" },
+  recovery: { bg: "#0d2129", fg: "#5fd7e7" },
+};
+
+export default function DecisionPanel({ market, fills, tick }: Props) {
   const fair = market.forecastProb * 100;
   const mid = (market.marketBid + market.marketAsk) / 2;
   const edge = fair - mid;
   const action = ACTION_STYLES[market.lastAction];
   const posture = POSTURE_STYLES[market.riskPosture];
+  const regime = market.regimeState?.regime ?? "calm";
+  const regimeStyle = REGIME_STYLES[regime];
+  const ticksInRegime = Math.max(0, tick - (market.regimeState?.enteredTick ?? 0));
   const invPct = Math.abs(market.inventory) / INVENTORY_LIMIT;
   const recentFills = fills.filter((f) => f.marketId === market.id).slice(0, 4);
 
@@ -68,12 +85,20 @@ export default function DecisionPanel({ market, fills }: Props) {
       title="Decision Engine"
       subtitle="market maker"
       right={
-        <span
-          className="rounded-[1px] px-1.5 py-0.5 text-[9px] font-bold tracking-[0.18em]"
-          style={{ background: posture.bg, color: posture.fg }}
-        >
-          {posture.label}
-        </span>
+        <div className="flex items-center gap-1">
+          <span
+            className="rounded-[1px] px-1.5 py-0.5 text-[9px] font-bold tracking-[0.18em]"
+            style={{ background: regimeStyle.bg, color: regimeStyle.fg }}
+          >
+            {regime.toUpperCase()} · {ticksInRegime}t
+          </span>
+          <span
+            className="rounded-[1px] px-1.5 py-0.5 text-[9px] font-bold tracking-[0.18em]"
+            style={{ background: posture.bg, color: posture.fg }}
+          >
+            {posture.label}
+          </span>
+        </div>
       }
     >
       <div
@@ -94,6 +119,11 @@ export default function DecisionPanel({ market, fills }: Props) {
         <p className="mt-2 text-[12px] leading-[1.55] text-[var(--color-foreground)]">
           {market.narrative}
         </p>
+        {market.flowReason ? (
+          <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-[var(--color-muted)]">
+            market: {market.flowReason}
+          </p>
+        ) : null}
       </div>
 
       <section className="mt-3">

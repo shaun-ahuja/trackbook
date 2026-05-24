@@ -5,30 +5,22 @@ import {
   type MarketAction,
   type TransitEvent,
 } from "../types";
-import { rand, randInt, randRange } from "../rng";
+import { randInt } from "../rng";
 import { clamp } from "../format";
 
 // Fill model. Three live sources + one post-hoc tag:
-//   passive    — resting quote at the touch occasionally gets hit by noise
-//   aggressive — desk lifts/hits when the conviction posture is engaged
-//   flatten    — risk reduction, ignores edge
-//   shock      — a sev-3 event sweeps our stale resting quote (we get run over)
-// `adverse` is set later by markAdverseSelection when a passive fill's mark
-// moves against the desk over the next few ticks.
+//   passive    — desk's resting quote crossed by an external market order
+//                in flow.ts (walk-the-desk gate)
+//   aggressive — desk crosses the spread via desk_actor in flow.ts
+//                (LIFT/HIT postures, cooldown-throttled)
+//   flatten    — desk_actor in flow.ts emits a market order opposite
+//                inventory while FLATTEN is engaged
+//   shock      — sev-3 live event sweeps our stale resting quote here,
+//                outside the flow tick (handled below)
+// `adverse` is set later by markAdverseSelection when a passive fill's
+// mark moves against the desk over the next few ticks.
 
-const PASSIVE_COOLDOWN = 4;
-const AGGRESSIVE_COOLDOWN = 6;
-const FLATTEN_COOLDOWN = 3;
-// Shock executions ignore cooldown — they're driven by the event, not by
-// quote pacing.
-
-const PASSIVE_BASE_RATE = 0.04;       // probability per eligible tick
-const PASSIVE_INSIDE_BONUS = 0.06;    // added when ourQuote is inside touch
-const AGGRESSIVE_BASE_RATE = 0.55;    // when posture engaged + cooldown ready
-const AGGRESSIVE_FAR_PENALTY = 0.08;  // per cent away from touch
-
-// Edge-decay scale: shock fills more likely when the event-driven probability
-// jump is large.
+// Shock executions ignore cooldown — they're driven by the event itself.
 const SHOCK_MIN_IMPACT = 0.06;
 
 export function mkFill(args: {
@@ -94,222 +86,76 @@ export function applyFill(market: Market, fill: Fill): Market {
   };
 }
 
-type GenInput = {
-  // Market state pre-tick — used for shock fills to execute at the *stale*
-  // resting quote (we got run over before we could pull it).
+type ShockGenInput = {
+  // Pre-flow snapshot — shock fills execute against the *stale* resting
+  // quote (we got run over before we could pull it).
   prev: Market;
-  // Market state post-decide — current touch, current ourBid/Ask.
   cur: Market;
   action: MarketAction;
-  // Event that fired this tick (may impact this market or another).
   event: TransitEvent | null;
   now: number;
   currentTick: number;
   seed: number;
 };
 
-type GenOutput = {
+type ShockGenOutput = {
   fill: Fill | null;
   seed: number;
 };
 
-export function generateFill(input: GenInput): GenOutput {
+// Force-fire a shock execution when a sev-3 live event materially impacts
+// our market and we're posted. Bypasses flow so the "got run over" feel
+// stays sharp — the trader sees their stale quote hit before they could
+// react. Planned/trip events are excluded: they're smooth signals, not
+// sudden enough to take a quote that way.
+export function generateShockFill(input: ShockGenInput): ShockGenOutput {
   const { prev, cur, action, event, now, currentTick } = input;
   let seed = input.seed;
 
+  if (!event || event.severity !== 3) return { fill: null, seed };
+  if ((event.category ?? "live") !== "live") return { fill: null, seed };
+  if (event.impacts[cur.id] === undefined) return { fill: null, seed };
+  if (action === "FLATTEN") return { fill: null, seed };
+
+  const impact = event.impacts[cur.id];
+  if (Math.abs(impact) < SHOCK_MIN_IMPACT) return { fill: null, seed };
+
   const fair = cur.fairValueCents;
-  const ticksSinceFill = currentTick - cur.lastFillTick;
+  const r = randInt(seed, 0, 0x7fffffff);
+  seed = r.seed;
 
-  // 1) Shock fills — sev-3 LIVE event impacting this market while we're
-  //    posted. Bypasses cooldown; uses the pre-shock resting quote.
-  //    Planned-work alerts and trip-aggregate signals are excluded:
-  //    they're scheduled or smoothed, never sudden enough to run a quote.
-  const eventCategory = event?.category ?? "live";
-  if (
-    event &&
-    event.severity === 3 &&
-    eventCategory === "live" &&
-    event.impacts[cur.id] !== undefined &&
-    action !== "FLATTEN"
-  ) {
-    const impact = event.impacts[cur.id];
-    if (Math.abs(impact) >= SHOCK_MIN_IMPACT) {
-      const r = randInt(seed, 0, 0x7fffffff);
-      seed = r.seed;
-      // Impact > 0 means fair jumped UP — our ask was stale-cheap → we get
-      // lifted (we sell). Impact < 0 means our bid was stale-rich → we get
-      // hit (we buy).
-      if (impact > 0) {
-        return {
-          fill: mkFill({
-            now,
-            tick: currentTick,
-            marketId: cur.id,
-            side: "SELL",
-            qty: 2,
-            price: clamp(prev.ourAsk, 1, 99),
-            kind: "shock",
-            markFair: fair,
-            rngTag: r.v,
-          }),
-          seed,
-        };
-      } else {
-        return {
-          fill: mkFill({
-            now,
-            tick: currentTick,
-            marketId: cur.id,
-            side: "BUY",
-            qty: 2,
-            price: clamp(prev.ourBid, 1, 99),
-            kind: "shock",
-            markFair: fair,
-            rngTag: r.v,
-          }),
-          seed,
-        };
-      }
-    }
+  // impact > 0 → fair jumped UP → our ask was stale-cheap → we get
+  // lifted (we sell). impact < 0 → mirror.
+  if (impact > 0) {
+    return {
+      fill: mkFill({
+        now,
+        tick: currentTick,
+        marketId: cur.id,
+        side: "SELL",
+        qty: 2,
+        price: clamp(prev.ourAsk, 1, 99),
+        kind: "shock",
+        markFair: fair,
+        rngTag: r.v,
+      }),
+      seed,
+    };
   }
-
-  // 2) Flatten fills — risk reduction, frequent until inventory clears.
-  if (action === "FLATTEN" && ticksSinceFill >= FLATTEN_COOLDOWN) {
-    const r = randInt(seed, 0, 0x7fffffff);
-    seed = r.seed;
-    if (cur.inventory > 0) {
-      return {
-        fill: mkFill({
-          now,
-          tick: currentTick,
-          marketId: cur.id,
-          side: "SELL",
-          qty: 2,
-          price: cur.marketBid,
-          kind: "flatten",
-          markFair: fair,
-          rngTag: r.v,
-        }),
-        seed,
-      };
-    } else if (cur.inventory < 0) {
-      return {
-        fill: mkFill({
-          now,
-          tick: currentTick,
-          marketId: cur.id,
-          side: "BUY",
-          qty: 2,
-          price: cur.marketAsk,
-          kind: "flatten",
-          markFair: fair,
-          rngTag: r.v,
-        }),
-        seed,
-      };
-    }
-  }
-
-  // 3) Aggressive fills — LIFT/HIT pursuing conviction edge.
-  if ((action === "LIFT" || action === "HIT") && ticksSinceFill >= AGGRESSIVE_COOLDOWN) {
-    const touch = action === "LIFT" ? cur.marketAsk : cur.marketBid;
-    const ourPrice = action === "LIFT" ? cur.ourAsk : cur.ourBid;
-    const distance = Math.abs(touch - ourPrice);
-    const prob = clamp(AGGRESSIVE_BASE_RATE - distance * AGGRESSIVE_FAR_PENALTY, 0.1, 0.85);
-    const fireR = rand(seed);
-    seed = fireR.seed;
-    if (fireR.v < prob) {
-      // Slippage: on volatile ticks, the fill prints a bit through.
-      const slipR = randRange(seed, 0, Math.min(1.0, cur.vol * 0.6));
-      seed = slipR.seed;
-      const r = randInt(seed, 0, 0x7fffffff);
-      seed = r.seed;
-      if (action === "LIFT") {
-        return {
-          fill: mkFill({
-            now,
-            tick: currentTick,
-            marketId: cur.id,
-            side: "BUY",
-            qty: 1,
-            price: clamp(cur.marketAsk + slipR.v, 1, 99),
-            kind: "aggressive",
-            markFair: fair,
-            rngTag: r.v,
-          }),
-          seed,
-        };
-      } else {
-        return {
-          fill: mkFill({
-            now,
-            tick: currentTick,
-            marketId: cur.id,
-            side: "SELL",
-            qty: 1,
-            price: clamp(cur.marketBid - slipR.v, 1, 99),
-            kind: "aggressive",
-            markFair: fair,
-            rngTag: r.v,
-          }),
-          seed,
-        };
-      }
-    }
-  }
-
-  // 4) Passive fills — HOLD/WIDEN resting quote occasionally gets traded
-  //    by noise. Higher prob when our quote is *inside* the synthetic touch.
-  if ((action === "HOLD" || action === "WIDEN") && ticksSinceFill >= PASSIVE_COOLDOWN) {
-    const bidInside = cur.ourBid > cur.marketBid;
-    const askInside = cur.ourAsk < cur.marketAsk;
-    const volDampener = 1 / (1 + cur.vol * 0.3); // people pull liquidity in vol
-    const baseProb = (PASSIVE_BASE_RATE +
-      (bidInside || askInside ? PASSIVE_INSIDE_BONUS : 0)) * volDampener;
-    const fireR = rand(seed);
-    seed = fireR.seed;
-    if (fireR.v < baseProb) {
-      // Decide which side gets hit. If both eligible, pick by chance.
-      const sideR = rand(seed);
-      seed = sideR.seed;
-      const r = randInt(seed, 0, 0x7fffffff);
-      seed = r.seed;
-      const buySide = sideR.v < 0.5;
-      if (buySide) {
-        return {
-          fill: mkFill({
-            now,
-            tick: currentTick,
-            marketId: cur.id,
-            side: "BUY",
-            qty: 1,
-            price: cur.ourBid,
-            kind: "passive",
-            markFair: fair,
-            rngTag: r.v,
-          }),
-          seed,
-        };
-      } else {
-        return {
-          fill: mkFill({
-            now,
-            tick: currentTick,
-            marketId: cur.id,
-            side: "SELL",
-            qty: 1,
-            price: cur.ourAsk,
-            kind: "passive",
-            markFair: fair,
-            rngTag: r.v,
-          }),
-          seed,
-        };
-      }
-    }
-  }
-
-  return { fill: null, seed };
+  return {
+    fill: mkFill({
+      now,
+      tick: currentTick,
+      marketId: cur.id,
+      side: "BUY",
+      qty: 2,
+      price: clamp(prev.ourBid, 1, 99),
+      kind: "shock",
+      markFair: fair,
+      rngTag: r.v,
+    }),
+    seed,
+  };
 }
 
 // Walk recent passive fills and flag those whose mark has decisively moved
