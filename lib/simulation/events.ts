@@ -19,9 +19,41 @@ function impactRoutes(
   return out;
 }
 
-const ALL_ROUTES = ["L", "4", "5", "6", "A", "C", "E", "7", "N", "Q", "R", "W"] as const;
+const ALL_ROUTES = [
+  "1", "2", "3",
+  "4", "5", "6",
+  "7",
+  "A", "B", "C", "D", "E", "F",
+  "G",
+  "J", "L", "M",
+  "N", "Q", "R", "S", "W", "Z",
+] as const;
 
 export const TEMPLATES: EventTemplate[] = [
+  {
+    line: "123",
+    kind: "SIGNAL",
+    severity: 2,
+    text: "Signal delay on west side · 1·2·3 holding at 96 St",
+    impacts: { "1": 0.08, "2": 0.08, "3": 0.08 },
+    driverTag: "96 St sig",
+  },
+  {
+    line: "123",
+    kind: "SICK_PASSENGER",
+    severity: 1,
+    text: "Sick passenger at Times Sq · 1·2·3 minor delays",
+    impacts: { "1": 0.04, "2": 0.04, "3": 0.04 },
+    driverTag: "TS sick pax",
+  },
+  {
+    line: "123",
+    kind: "CLEAR",
+    severity: 1,
+    text: "West side incident clearing · 1·2·3 resuming",
+    impacts: { "1": -0.06, "2": -0.06, "3": -0.06 },
+    driverTag: "123 clearing",
+  },
   {
     line: "L",
     kind: "SIGNAL",
@@ -182,9 +214,125 @@ export const TEMPLATES: EventTemplate[] = [
     impacts: { N: -0.07, W: -0.07 },
     driverTag: "QBP normal",
   },
+  {
+    line: "BDFM",
+    kind: "DELAY",
+    severity: 2,
+    text: "6 Avenue congestion · B·D·F·M holding at 34 St",
+    impacts: { B: 0.08, D: 0.08, F: 0.08, M: 0.06 },
+    driverTag: "6 Av cong",
+  },
+  {
+    line: "BDFM",
+    kind: "SIGNAL",
+    severity: 2,
+    text: "Signal trouble at W 4 St · B·D·F·M rerouting",
+    impacts: { B: 0.07, D: 0.07, F: 0.07, M: 0.05 },
+    driverTag: "W4 sig",
+  },
+  {
+    line: "BDFM",
+    kind: "CLEAR",
+    severity: 1,
+    text: "6 Avenue service normalizing",
+    impacts: { B: -0.05, D: -0.05, F: -0.05, M: -0.04 },
+    driverTag: "6 Av clear",
+  },
+  {
+    line: "G",
+    kind: "DELAY",
+    severity: 2,
+    text: "Crosstown delay · G holding at Court Sq",
+    impacts: { G: 0.1 },
+    driverTag: "Court Sq G",
+  },
+  {
+    line: "G",
+    kind: "SICK_PASSENGER",
+    severity: 1,
+    text: "Sick passenger on G at Bedford-Nostrand",
+    impacts: { G: 0.04 },
+    driverTag: "Bed-Nost sick pax",
+  },
+  {
+    line: "G",
+    kind: "CLEAR",
+    severity: 1,
+    text: "G crosstown resuming with residual delays",
+    impacts: { G: -0.07 },
+    driverTag: "G clearing",
+  },
+  {
+    line: "JZ",
+    kind: "DELAY",
+    severity: 2,
+    text: "Nassau Street delay · J/Z holding at Marcy Av",
+    impacts: { J: 0.09, Z: 0.09 },
+    driverTag: "Marcy JZ",
+  },
+  {
+    line: "JZ",
+    kind: "POLICE",
+    severity: 2,
+    text: "NYPD activity at Broadway Junction · J/Z held",
+    impacts: { J: 0.07, Z: 0.07 },
+    driverTag: "BJ police",
+  },
+  {
+    line: "JZ",
+    kind: "CLEAR",
+    severity: 1,
+    text: "Nassau service normalizing · J/Z resuming",
+    impacts: { J: -0.06, Z: -0.06 },
+    driverTag: "JZ clear",
+  },
+  {
+    line: "S",
+    kind: "DELAY",
+    severity: 2,
+    text: "Shuttle service gap · 42 St Shuttle running every 20m",
+    impacts: { S: 0.11 },
+    driverTag: "42 St shuttle gap",
+  },
+  {
+    line: "S",
+    kind: "SIGNAL",
+    severity: 2,
+    text: "Franklin Av shuttle signal issue · S suspended briefly",
+    impacts: { S: 0.09 },
+    driverTag: "Franklin S sig",
+  },
+  {
+    line: "S",
+    kind: "CLEAR",
+    severity: 1,
+    text: "Shuttle service restored",
+    impacts: { S: -0.07 },
+    driverTag: "S clear",
+  },
+  {
+    line: "7",
+    kind: "RIDERSHIP",
+    severity: 2,
+    text: "Heavy 7 crowding at Flushing-Main St · platform overflow",
+    impacts: { "7": 0.06 },
+    driverTag: "Flushing crowd",
+  },
 ];
 
-const LINES_FOR_REGIME: LineId[] = ["L", "456", "ACE", "7", "WX", "NQRW"];
+const LINES_FOR_REGIME: LineId[] = [
+  "123",
+  "456",
+  "7",
+  "ACE",
+  "BDFM",
+  "G",
+  "JZ",
+  "L",
+  "NQRW",
+  "S",
+  "WX",
+];
 
 // Regime tuning. Lower-frequency baseline so events feel deliberate; once a
 // regime takes hold, the disrupted line gets a much higher spawn rate.

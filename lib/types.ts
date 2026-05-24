@@ -1,10 +1,15 @@
 export type LineId =
-  | "L"
+  | "123"
   | "456"
-  | "ACE"
   | "7"
-  | "WX"
-  | "NQRW";
+  | "ACE"
+  | "BDFM"
+  | "G"
+  | "JZ"
+  | "L"
+  | "NQRW"
+  | "S"
+  | "WX";
 
 export type EventKind =
   | "DELAY"

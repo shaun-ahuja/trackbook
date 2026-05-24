@@ -9,6 +9,7 @@ type Props = {
   markets: Market[];
   selectedId: string;
   onSelect: (id: string, meta: boolean) => void;
+  onToggleWatch: (id: string) => void;
   now: number;
   latestEvent?: TransitEvent;
   watchlistIds?: readonly string[];
@@ -18,6 +19,7 @@ export default function MarketsList({
   markets,
   selectedId,
   onSelect,
+  onToggleWatch,
   now,
   latestEvent,
   watchlistIds,
@@ -74,18 +76,37 @@ export default function MarketsList({
                     {mid.toFixed(1)}
                   </span>
                 </div>
-                <span
-                  className={clsx(
-                    "tab-num text-[10px]",
-                    edge > 0.1
-                      ? "text-[var(--color-up)]"
-                      : edge < -0.1
-                        ? "text-[var(--color-down)]"
-                        : "text-[var(--color-muted)]",
-                  )}
-                >
-                  {signed(edge, 1)}¢
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={clsx(
+                      "tab-num text-[10px]",
+                      edge > 0.1
+                        ? "text-[var(--color-up)]"
+                        : edge < -0.1
+                          ? "text-[var(--color-down)]"
+                          : "text-[var(--color-muted)]",
+                    )}
+                  >
+                    {signed(edge, 1)}¢
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleWatch(m.id);
+                    }}
+                    title={pinned ? "Remove from watchlist" : "Add to watchlist"}
+                    aria-pressed={pinned}
+                    className={clsx(
+                      "inline-flex h-[14px] w-[14px] items-center justify-center rounded-[1px] border text-[10px] leading-none",
+                      pinned
+                        ? "border-[var(--color-warn)] text-[var(--color-warn)] hover:bg-[#2a2010]"
+                        : "border-[var(--color-panel-border)] text-[var(--color-muted)] hover:border-[var(--color-warn)] hover:text-[var(--color-warn)]",
+                    )}
+                  >
+                    {pinned ? "✓" : "+"}
+                  </button>
+                </div>
               </div>
               <div className="mt-0.5 truncate text-[10px] text-[var(--color-muted)]">
                 {m.contract}

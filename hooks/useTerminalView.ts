@@ -9,6 +9,7 @@ export type UseTerminalView = {
   viewMode: ViewMode;
   activeIds: string[];
   handleMarketClick: (id: string, meta: boolean) => void;
+  toggleWatch: (id: string) => void;
   exitView: () => void;
 };
 
@@ -46,8 +47,22 @@ export function useTerminalView({
         }
       } else {
         setFocusedMarketId(id);
-        setWatchlistIds([]);
         onSelectMarket(id);
+      }
+    },
+    [watchlistIds, currentSelectedId, onSelectMarket],
+  );
+
+  const toggleWatch = useCallback(
+    (id: string) => {
+      if (watchlistIds.includes(id)) {
+        const next = watchlistIds.filter((x) => x !== id);
+        setWatchlistIds(next);
+        if (id === currentSelectedId && next.length > 0) {
+          onSelectMarket(next[next.length - 1]);
+        }
+      } else {
+        setWatchlistIds([...watchlistIds, id]);
       }
     },
     [watchlistIds, currentSelectedId, onSelectMarket],
@@ -64,6 +79,7 @@ export function useTerminalView({
     viewMode,
     activeIds,
     handleMarketClick,
+    toggleWatch,
     exitView,
   };
 }

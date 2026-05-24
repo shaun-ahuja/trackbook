@@ -120,9 +120,13 @@ export default function TopBar({
             <button
               onClick={onExitView}
               className="ml-0.5 rounded-[1px] border border-[var(--color-panel-border)] px-1 py-px text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
-              title="Return to desk view (Esc)"
+              title={
+                viewMode === "watchlist"
+                  ? "Clear watchlist and return to desk (Esc)"
+                  : "Return to desk view (Esc)"
+              }
             >
-              Desk
+              {viewMode === "watchlist" ? "Clear watchlist" : "Desk"}
             </button>
           )}
         </div>

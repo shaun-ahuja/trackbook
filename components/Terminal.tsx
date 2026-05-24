@@ -31,6 +31,7 @@ export default function Terminal() {
     viewMode,
     activeIds,
     handleMarketClick,
+    toggleWatch,
     exitView,
   } = useTerminalView({
     currentSelectedId: state.selectedMarketId,
@@ -100,6 +101,7 @@ export default function Terminal() {
             markets={marketsArr}
             selectedId={state.selectedMarketId}
             onSelect={handleMarketClick}
+            onToggleWatch={toggleWatch}
             now={state.now}
             latestEvent={latestEvent}
             watchlistIds={watchlistIds}

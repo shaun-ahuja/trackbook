@@ -28,12 +28,17 @@ const SEV_COLOR = {
 } as const;
 
 const LINE_COLORS: Record<string, string> = {
-  L: "#A7A9AC",
+  "123": "#EE352E",
   "456": "#00933C",
-  ACE: "#0039A6",
   "7": "#B933AD",
-  WX: "#FCCC0A",
+  ACE: "#0039A6",
+  BDFM: "#FF6319",
+  G: "#6CBE45",
+  JZ: "#996633",
+  L: "#A7A9AC",
   NQRW: "#FCCC0A",
+  S: "#808183",
+  WX: "#FCCC0A",
 };
 
 export default function EventTape({ events, markets, scopeLabel }: Props) {

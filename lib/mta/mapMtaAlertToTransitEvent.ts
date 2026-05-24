@@ -2,37 +2,68 @@ import type { LineId, Severity, TransitEvent } from "../types";
 import type { NormalizedAlert } from "./types";
 
 // Route → market. Each route is its own market contract; the market id
-// equals the route designator.
+// equals the route designator. Shuttle designators (GS / FS / H) collapse
+// to a single "S" market.
 const ROUTE_TO_MARKETS: Record<string, string[]> = {
-  L: ["L"],
+  "1": ["1"],
+  "2": ["2"],
+  "3": ["3"],
   "4": ["4"],
   "5": ["5"],
   "6": ["6"],
-  A: ["A"],
-  C: ["C"],
-  E: ["E"],
   "7": ["7"],
+  A: ["A"],
+  B: ["B"],
+  C: ["C"],
+  D: ["D"],
+  E: ["E"],
+  F: ["F"],
+  G: ["G"],
+  J: ["J"],
+  L: ["L"],
+  M: ["M"],
   N: ["N"],
   Q: ["Q"],
   R: ["R"],
+  S: ["S"],
+  GS: ["S"],
+  FS: ["S"],
+  H: ["S"],
   W: ["W"],
+  Z: ["Z"],
 };
 
-const ALL_ROUTE_MARKETS = Object.keys(ROUTE_TO_MARKETS);
+const ALL_ROUTE_MARKETS = Array.from(
+  new Set(Object.values(ROUTE_TO_MARKETS).flat()),
+);
 
 const ROUTE_TO_LINE: Record<string, LineId> = {
-  L: "L",
+  "1": "123",
+  "2": "123",
+  "3": "123",
   "4": "456",
   "5": "456",
   "6": "456",
-  A: "ACE",
-  C: "ACE",
-  E: "ACE",
   "7": "7",
+  A: "ACE",
+  B: "BDFM",
+  C: "ACE",
+  D: "BDFM",
+  E: "ACE",
+  F: "BDFM",
+  G: "G",
+  J: "JZ",
+  L: "L",
+  M: "BDFM",
   N: "NQRW",
   Q: "NQRW",
   R: "NQRW",
+  S: "S",
+  GS: "S",
+  FS: "S",
+  H: "S",
   W: "NQRW",
+  Z: "JZ",
 };
 
 // Mid-of-range magnitudes from the spec. Sev-3 is intentionally below the
