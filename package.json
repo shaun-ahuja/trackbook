@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "build:orderbook-wasm": "node scripts/build-orderbook-wasm.mjs",
+    "test:engine:native": "node scripts/test-matching-engine-native.mjs",
+    "test:engine:parity": "node --experimental-strip-types --test lib/wasm/__tests__/matchingEngineParity.test.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",
