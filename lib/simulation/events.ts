@@ -1,351 +1,20 @@
-import type { LineId, Regime, Severity, TransitEvent } from "../types";
-import { pick, rand, randInt } from "../rng";
+import type {
+  NetworkStressContext,
+  Regime,
+  SimState,
+  TransitEvent,
+} from "../types";
+import { generateEvent, rollVolSpikeStart } from "./eventGenerator";
 
-export type EventTemplate = {
-  line: LineId;
-  kind: TransitEvent["kind"];
-  severity: Severity;
-  text: string;
-  impacts: Record<string, number>;
-  driverTag: string;
-};
-
-function impactRoutes(
-  routes: readonly string[],
-  mag: number,
-): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const r of routes) out[r] = mag;
-  return out;
-}
-
-const ALL_ROUTES = [
-  "1", "2", "3",
-  "4", "5", "6",
-  "7",
-  "A", "B", "C", "D", "E", "F",
-  "G",
-  "J", "L", "M",
-  "N", "Q", "R", "S", "W", "Z",
-] as const;
-
-export const TEMPLATES: EventTemplate[] = [
-  {
-    line: "123",
-    kind: "SIGNAL",
-    severity: 2,
-    text: "Signal delay on west side · 1·2·3 holding at 96 St",
-    impacts: { "1": 0.08, "2": 0.08, "3": 0.08 },
-    driverTag: "96 St sig",
-  },
-  {
-    line: "123",
-    kind: "SICK_PASSENGER",
-    severity: 1,
-    text: "Sick passenger at Times Sq · 1·2·3 minor delays",
-    impacts: { "1": 0.04, "2": 0.04, "3": 0.04 },
-    driverTag: "TS sick pax",
-  },
-  {
-    line: "123",
-    kind: "CLEAR",
-    severity: 1,
-    text: "West side incident clearing · 1·2·3 resuming",
-    impacts: { "1": -0.06, "2": -0.06, "3": -0.06 },
-    driverTag: "123 clearing",
-  },
-  {
-    line: "L",
-    kind: "SIGNAL",
-    severity: 2,
-    text: "Signal problem at Bedford Av · northbound L holding",
-    impacts: { L: 0.09 },
-    driverTag: "Bedford sig",
-  },
-  {
-    line: "L",
-    kind: "SICK_PASSENGER",
-    severity: 1,
-    text: "Sick passenger at Union Sq · L delays minor",
-    impacts: { L: 0.04 },
-    driverTag: "Union Sq sick pax",
-  },
-  {
-    line: "L",
-    kind: "CLEAR",
-    severity: 1,
-    text: "Bedford incident clearing · L resuming",
-    impacts: { L: -0.07 },
-    driverTag: "L clearing",
-  },
-  {
-    line: "456",
-    kind: "DELAY",
-    severity: 3,
-    text: "Major delay 4·5·6 · disabled train at 86 St",
-    impacts: { "4": 0.14, "5": 0.14, "6": 0.14, "7": 0.02 },
-    driverTag: "86 St disabled",
-  },
-  {
-    line: "456",
-    kind: "POLICE",
-    severity: 2,
-    text: "NYPD activity at Grand Central · 4·5 single-tracking",
-    impacts: { "4": 0.08, "5": 0.08 },
-    driverTag: "GCT police",
-  },
-  {
-    line: "456",
-    kind: "SICK_PASSENGER",
-    severity: 1,
-    text: "Sick passenger on 6 train at 33 St · holding",
-    impacts: { "6": 0.05 },
-    driverTag: "33 St sick pax",
-  },
-  {
-    line: "456",
-    kind: "CLEAR",
-    severity: 1,
-    text: "Lex Ave service resuming with residual delays",
-    impacts: { "4": -0.06, "5": -0.06, "6": -0.06 },
-    driverTag: "Lex resuming",
-  },
-  {
-    line: "ACE",
-    kind: "DELAY",
-    severity: 2,
-    text: "A train reroute via F line extended through Sunday",
-    impacts: { A: 0.11 },
-    driverTag: "A→F reroute",
-  },
-  {
-    line: "ACE",
-    kind: "SIGNAL",
-    severity: 2,
-    text: "Signal trouble at Jay St · C/E rerouting",
-    impacts: { C: 0.06, E: 0.06 },
-    driverTag: "Jay St sig",
-  },
-  {
-    line: "ACE",
-    kind: "DELAY",
-    severity: 2,
-    text: "E delays via F at World Trade Center",
-    impacts: { E: 0.09 },
-    driverTag: "WTC E delay",
-  },
-  {
-    line: "ACE",
-    kind: "CLEAR",
-    severity: 1,
-    text: "Jay St signal cleared · C/E normalizing",
-    impacts: { C: -0.05, E: -0.05 },
-    driverTag: "Jay St clear",
-  },
-  {
-    line: "7",
-    kind: "SIGNAL",
-    severity: 3,
-    text: "Signal failure at Queensboro Plaza · 7 service suspended",
-    impacts: { "7": 0.18 },
-    driverTag: "QBP signal fail",
-  },
-  {
-    line: "7",
-    kind: "RIDERSHIP",
-    severity: 1,
-    text: "Heavy 7 ridership · Mets game getting out",
-    impacts: { "7": 0.03 },
-    driverTag: "Mets crowd",
-  },
-  {
-    line: "WX",
-    kind: "WEATHER",
-    severity: 3,
-    text: "NWS flash flood warning · subway systemwide impact possible",
-    impacts: impactRoutes(ALL_ROUTES, 0.05),
-    driverTag: "flash flood",
-  },
-  {
-    line: "WX",
-    kind: "WEATHER",
-    severity: 2,
-    text: "Heavy rain over Manhattan · station flooding reports",
-    impacts: impactRoutes(ALL_ROUTES, 0.025),
-    driverTag: "heavy rain",
-  },
-  {
-    line: "WX",
-    kind: "CLEAR",
-    severity: 1,
-    text: "Rain easing · MTA downgrades weather advisory",
-    impacts: impactRoutes(ALL_ROUTES, -0.02),
-    driverTag: "rain easing",
-  },
-  {
-    line: "NQRW",
-    kind: "DELAY",
-    severity: 2,
-    text: "N/W delays · switch problem at Queensboro Plaza",
-    impacts: { N: 0.1, W: 0.1 },
-    driverTag: "QBP switch",
-  },
-  {
-    line: "NQRW",
-    kind: "SICK_PASSENGER",
-    severity: 1,
-    text: "Sick passenger on Q train at 57 St · holding",
-    impacts: { Q: 0.05 },
-    driverTag: "57 St sick pax",
-  },
-  {
-    line: "NQRW",
-    kind: "DELAY",
-    severity: 2,
-    text: "R local delays at Bay Ridge · switch trouble",
-    impacts: { R: 0.08 },
-    driverTag: "Bay Ridge R",
-  },
-  {
-    line: "NQRW",
-    kind: "CLEAR",
-    severity: 1,
-    text: "Queensboro switch resolved · N/W normalizing",
-    impacts: { N: -0.07, W: -0.07 },
-    driverTag: "QBP normal",
-  },
-  {
-    line: "BDFM",
-    kind: "DELAY",
-    severity: 2,
-    text: "6 Avenue congestion · B·D·F·M holding at 34 St",
-    impacts: { B: 0.08, D: 0.08, F: 0.08, M: 0.06 },
-    driverTag: "6 Av cong",
-  },
-  {
-    line: "BDFM",
-    kind: "SIGNAL",
-    severity: 2,
-    text: "Signal trouble at W 4 St · B·D·F·M rerouting",
-    impacts: { B: 0.07, D: 0.07, F: 0.07, M: 0.05 },
-    driverTag: "W4 sig",
-  },
-  {
-    line: "BDFM",
-    kind: "CLEAR",
-    severity: 1,
-    text: "6 Avenue service normalizing",
-    impacts: { B: -0.05, D: -0.05, F: -0.05, M: -0.04 },
-    driverTag: "6 Av clear",
-  },
-  {
-    line: "G",
-    kind: "DELAY",
-    severity: 2,
-    text: "Crosstown delay · G holding at Court Sq",
-    impacts: { G: 0.1 },
-    driverTag: "Court Sq G",
-  },
-  {
-    line: "G",
-    kind: "SICK_PASSENGER",
-    severity: 1,
-    text: "Sick passenger on G at Bedford-Nostrand",
-    impacts: { G: 0.04 },
-    driverTag: "Bed-Nost sick pax",
-  },
-  {
-    line: "G",
-    kind: "CLEAR",
-    severity: 1,
-    text: "G crosstown resuming with residual delays",
-    impacts: { G: -0.07 },
-    driverTag: "G clearing",
-  },
-  {
-    line: "JZ",
-    kind: "DELAY",
-    severity: 2,
-    text: "Nassau Street delay · J/Z holding at Marcy Av",
-    impacts: { J: 0.09, Z: 0.09 },
-    driverTag: "Marcy JZ",
-  },
-  {
-    line: "JZ",
-    kind: "POLICE",
-    severity: 2,
-    text: "NYPD activity at Broadway Junction · J/Z held",
-    impacts: { J: 0.07, Z: 0.07 },
-    driverTag: "BJ police",
-  },
-  {
-    line: "JZ",
-    kind: "CLEAR",
-    severity: 1,
-    text: "Nassau service normalizing · J/Z resuming",
-    impacts: { J: -0.06, Z: -0.06 },
-    driverTag: "JZ clear",
-  },
-  {
-    line: "S",
-    kind: "DELAY",
-    severity: 2,
-    text: "Shuttle service gap · 42 St Shuttle running every 20m",
-    impacts: { S: 0.11 },
-    driverTag: "42 St shuttle gap",
-  },
-  {
-    line: "S",
-    kind: "SIGNAL",
-    severity: 2,
-    text: "Franklin Av shuttle signal issue · S suspended briefly",
-    impacts: { S: 0.09 },
-    driverTag: "Franklin S sig",
-  },
-  {
-    line: "S",
-    kind: "CLEAR",
-    severity: 1,
-    text: "Shuttle service restored",
-    impacts: { S: -0.07 },
-    driverTag: "S clear",
-  },
-  {
-    line: "7",
-    kind: "RIDERSHIP",
-    severity: 2,
-    text: "Heavy 7 crowding at Flushing-Main St · platform overflow",
-    impacts: { "7": 0.06 },
-    driverTag: "Flushing crowd",
-  },
-];
-
-const LINES_FOR_REGIME: LineId[] = [
-  "123",
-  "456",
-  "7",
-  "ACE",
-  "BDFM",
-  "G",
-  "JZ",
-  "L",
-  "NQRW",
-  "S",
-  "WX",
-];
-
-// Regime tuning. Lower-frequency baseline so events feel deliberate; once a
-// regime takes hold, the disrupted line gets a much higher spawn rate.
-const BASELINE_EVENT_CHANCE = 0.09;
-const REGIME_EVENT_CHANCE = 0.26;
-const REGIME_START_CHANCE = 0.014;     // ~once every 70 ticks when idle
-const VOL_SPIKE_START_CHANCE = 0.005;
-const REGIME_MIN_LEN = 30;
-const REGIME_MAX_LEN = 80;
-const VOL_SPIKE_LEN = 22;
-const REGIME_LINE_BIAS = 0.7;           // chance event picks from the active line
-const CLEAR_DUE_MIN = 6;
-const CLEAR_DUE_MAX = 15;
+// Thin orchestrator over `eventGenerator`. The hardcoded TEMPLATES table
+// that used to live here is gone — everything is now generated from world
+// state. See `eventGenerator.ts` for the choice points and
+// `eventGenerationConfig.ts` for tunable weights.
+//
+// What stays here:
+//   - The `Regime` FSM scratchpad (vol-spike counter, legacy fields).
+//   - `safeRegime` self-heal across hot reloads.
+//   - The reducer-facing `tickEvents` entry point.
 
 export const VOL_SPIKE_MULTIPLIER = 1.8;
 
@@ -359,52 +28,47 @@ export function emptyRegime(): Regime {
   };
 }
 
-// Self-heal: hot-reload may leave `regime` undefined on SimState.
+// Self-heal: hot-reload may leave `regime` undefined or partial on SimState.
 function safeRegime(regime: Regime | undefined): Regime {
   if (!regime) return emptyRegime();
   return {
     activeLine: regime.activeLine ?? null,
-    ticksRemaining: Number.isFinite(regime.ticksRemaining) ? regime.ticksRemaining : 0,
+    ticksRemaining: Number.isFinite(regime.ticksRemaining)
+      ? regime.ticksRemaining
+      : 0,
     intensity: Number.isFinite(regime.intensity) ? regime.intensity : 0,
     volSpikeTicksRemaining: Number.isFinite(regime.volSpikeTicksRemaining)
       ? regime.volSpikeTicksRemaining
       : 0,
-    pendingClears: Array.isArray(regime.pendingClears) ? regime.pendingClears : [],
-  };
-}
-
-function buildEvent(
-  tpl: EventTemplate,
-  seed: number,
-  now: number,
-): { event: TransitEvent; seed: number } {
-  const idR = randInt(seed, 0, 0x7fffffff);
-  return {
-    event: {
-      id: `e_${now}_${idR.v.toString(36)}`,
-      ts: now,
-      line: tpl.line,
-      kind: tpl.kind,
-      severity: tpl.severity,
-      text: tpl.text,
-      impacts: { ...tpl.impacts },
-    },
-    seed: idR.seed,
+    pendingClears: Array.isArray(regime.pendingClears)
+      ? regime.pendingClears.filter(
+          (p): p is { route: string; atTick: number; magnitude: number } =>
+            typeof p?.route === "string" &&
+            Number.isFinite(p?.atTick) &&
+            Number.isFinite(p?.magnitude),
+        )
+      : [],
   };
 }
 
 // Advance the regime state and (maybe) generate an event.
 //
-// Sequence: tick down counters → maybe start a new disruption regime or
-// vol spike → fire any pending CLEAR that's due → roll for a fresh event,
-// biased toward the active line if a regime is running → if the event is
-// sev-3, schedule a CLEAR for the same line 6–15 ticks out.
+// Sequence per tick:
+//   1) Decrement counters; clear expired `activeLine`/intensity.
+//   2) Flush any pendingClear whose atTick has arrived. (Generator's
+//      preferred recovery path is the per-tick probabilistic roll inside
+//      `generateEvent`, but we still honor scheduled clears if anything
+//      enqueues them — they stay supported, just unused by default.)
+//   3) If `spawn`, roll a vol-spike start conditioned on world signals.
+//   4) If `spawn`, delegate to `generateEvent`. The generator handles
+//      weather, recovery rolls, the spawn gate, and the disruption pick.
 //
 // When `spawn` is false (MTA-only mode, or hybrid while MTA is fresh),
-// regime counters and pending CLEARs still advance but no synthetic
-// event or new regime is produced.
+// counters and pendingClears still advance but no synthetic event fires.
 export function tickEvents(
   regimeIn: Regime | undefined,
+  state: SimState,
+  stress: NetworkStressContext,
   seed: number,
   now: number,
   currentTick: number,
@@ -420,99 +84,55 @@ export function tickEvents(
     regime = { ...regime, activeLine: null, intensity: 0 };
   }
 
-  // Maybe start a new disruption regime.
-  if (spawn && !regime.activeLine) {
-    const roll = rand(seed);
-    seed = roll.seed;
-    if (roll.v < REGIME_START_CHANCE) {
-      const lineR = pick(seed, LINES_FOR_REGIME);
-      seed = lineR.seed;
-      const lenR = randInt(seed, REGIME_MIN_LEN, REGIME_MAX_LEN);
-      seed = lenR.seed;
-      regime = {
-        ...regime,
-        activeLine: lineR.v,
-        ticksRemaining: lenR.v,
-        intensity: 0.7 + (lenR.v - REGIME_MIN_LEN) / (REGIME_MAX_LEN - REGIME_MIN_LEN) * 0.3,
-      };
-    }
-  }
-
-  // Maybe start a vol spike (independent of disruption regime).
-  if (spawn && regime.volSpikeTicksRemaining === 0) {
-    const roll = rand(seed);
-    seed = roll.seed;
-    if (roll.v < VOL_SPIKE_START_CHANCE) {
-      regime = { ...regime, volSpikeTicksRemaining: VOL_SPIKE_LEN };
-    }
-  }
-
-  // Fire any due pending CLEAR.
+  // Flush due pendingClears (rare — kept for forward-compat). The first due
+  // entry wins this tick; the rest carry over.
   const dueIdx = regime.pendingClears.findIndex((p) => p.atTick <= currentTick);
   if (dueIdx >= 0) {
     const due = regime.pendingClears[dueIdx];
     const remaining = regime.pendingClears.filter((_, i) => i !== dueIdx);
     regime = { ...regime, pendingClears: remaining };
-    const clearTpl = TEMPLATES.find((t) => t.line === due.line && t.kind === "CLEAR");
-    if (clearTpl) {
-      const built = buildEvent(clearTpl, seed, now);
-      return { event: built.event, regime, seed: built.seed };
+    const market = state.markets[due.route];
+    if (market) {
+      // Lightweight CLEAR built without the generator's recovery scoring —
+      // we already committed to firing this. Use a sev-1 phrasing.
+      const idR = Math.floor(seed % 0x7fffffff).toString(36);
+      const event: TransitEvent = {
+        id: `e_${now}_${idR}`,
+        ts: now,
+        line: market.line,
+        kind: "CLEAR",
+        severity: 1,
+        text: `${market.lineLabel} delays clearing`,
+        impacts: { [due.route]: due.magnitude },
+        source: "synthetic",
+        category: "live",
+      };
+      return { event, regime, seed };
     }
   }
 
-  // Roll for a fresh event spawn.
   if (!spawn) return { event: null, regime, seed };
-  const baseRate = regime.activeLine ? REGIME_EVENT_CHANCE : BASELINE_EVENT_CHANCE;
-  const fireR = rand(seed);
-  seed = fireR.seed;
-  if (fireR.v > baseRate) return { event: null, regime, seed };
 
-  // Pick a template, biased toward the active line if any.
-  let tpl: EventTemplate;
-  if (regime.activeLine) {
-    const biasR = rand(seed);
-    seed = biasR.seed;
-    if (biasR.v < REGIME_LINE_BIAS) {
-      const lineTpls = TEMPLATES.filter((t) => t.line === regime.activeLine);
-      const p = pick(seed, lineTpls);
-      seed = p.seed;
-      tpl = p.v;
-    } else {
-      const p = pick(seed, TEMPLATES);
-      seed = p.seed;
-      tpl = p.v;
+  // Vol-spike trigger — state-conditioned, damped.
+  if (regime.volSpikeTicksRemaining === 0) {
+    const v = rollVolSpikeStart(state, seed);
+    seed = v.seed;
+    if (v.fire) {
+      regime = { ...regime, volSpikeTicksRemaining: v.lengthTicks };
     }
-  } else {
-    const p = pick(seed, TEMPLATES);
-    seed = p.seed;
-    tpl = p.v;
   }
 
-  // Sev-3 disruption: schedule a CLEAR for the same line 6–15 ticks ahead.
-  if (tpl.severity === 3) {
-    const dueR = randInt(seed, CLEAR_DUE_MIN, CLEAR_DUE_MAX);
-    seed = dueR.seed;
-    regime = {
-      ...regime,
-      pendingClears: [
-        ...regime.pendingClears,
-        { line: tpl.line, atTick: currentTick + dueR.v },
-      ],
-    };
+  // Delegate to generator. It owns weather, recovery, spawn gate, and
+  // disruption selection — all from world state.
+  const gen = generateEvent(state, stress, seed, now);
+  seed = gen.seed;
+
+  // Informational: stamp the activeLine field with the most recent origin
+  // route's line for debug UI. Not used for selection anywhere.
+  if (gen.event && gen.event.source === "synthetic") {
+    regime = { ...regime, activeLine: gen.event.line };
   }
 
-  const built = buildEvent(tpl, seed, now);
-  return { event: built.event, regime, seed: built.seed };
-}
-
-export function templateTagFor(event: TransitEvent): string {
-  const tpl = TEMPLATES.find((t) => t.text === event.text);
-  if (tpl) return `${tpl.driverTag} · sev${event.severity}`;
-  const prefix =
-    event.source === "mta"
-      ? "MTA"
-      : event.source === "trip"
-        ? "TRIP"
-        : event.kind.toLowerCase();
-  return `${prefix} · sev${event.severity}`;
+  void currentTick;
+  return { event: gen.event, regime, seed };
 }

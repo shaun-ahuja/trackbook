@@ -259,15 +259,20 @@ export type Fill = {
 };
 
 export type Regime = {
-  // Disruption cluster: an active line attracts more events for a stretch.
+  // Disruption cluster: legacy fields, retained on the type so persisted
+  // state still parses. The dynamic generator no longer drives selection
+  // off `activeLine` — selection comes from per-market world state. Kept
+  // here as informational fields the generator may write for debug.
   activeLine: LineId | null;
   ticksRemaining: number;
   intensity: number;
   // Vol spike: temporarily multiplies synthetic-tape noise across all markets.
   volSpikeTicksRemaining: number;
-  // CLEAR events scheduled after sev-3 disruptions so service recovers
-  // instead of staying elevated indefinitely.
-  pendingClears: { line: LineId; atTick: number }[];
+  // Reserved for short-horizon scheduled recoveries the generator may emit
+  // (e.g. an immediate same-tick CLEAR companion). The generator's preferred
+  // path is a per-tick probabilistic recovery roll, not a deterministic
+  // promise — this list usually stays empty.
+  pendingClears: { route: string; atTick: number; magnitude: number }[];
 };
 
 export type SimState = {

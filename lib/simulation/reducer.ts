@@ -130,10 +130,16 @@ function tick(state: SimState, now: number): SimState {
 
   const spawn = shouldSpawnSynthetic(state);
 
+  // Compute network stress + cross-market contagion ONCE per tick, before
+  // the event generator and per-market loop. Both use the state at tick
+  // start — they are order-independent across markets.
+  const stress = computeNetworkStress(now);
+  const contagion = computeContagion(state.markets, state.marketOrder, nextTick);
+
   const evGen =
     state.dataSource === "mta"
       ? { event: null, regime: state.regime, seed }
-      : tickEvents(state.regime, seed, now, nextTick, spawn);
+      : tickEvents(state.regime, state, stress, seed, now, nextTick, spawn);
   seed = evGen.seed;
   const newEvent = evGen.event;
   const newRegime = evGen.regime;
@@ -141,12 +147,6 @@ function tick(state: SimState, now: number): SimState {
   const events = newEvent
     ? [newEvent, ...state.events].slice(0, MAX_EVENTS)
     : state.events;
-
-  // Compute network stress + cross-market contagion ONCE per tick, before
-  // the per-market loop. Both use the state at tick start — they are
-  // order-independent across markets.
-  const stress = computeNetworkStress(now);
-  const contagion = computeContagion(state.markets, state.marketOrder, nextTick);
 
   let newFills = [...state.fills];
   const newMarkets: SimState["markets"] = { ...state.markets };
