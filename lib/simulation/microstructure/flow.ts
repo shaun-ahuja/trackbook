@@ -1,4 +1,6 @@
 import type {
+  AgentSlotKey,
+  AgentState,
   Fill,
   FlowEvent,
   Market,
@@ -23,6 +25,9 @@ import {
   runArchetype,
   type ArchetypeOutput,
 } from "./archetypes";
+import { archetypeToSlot, safeAgents } from "./agentState";
+import { REBALANCER_POSITION_CAP } from "./config";
+import { clamp } from "../../format";
 
 // EWMA tuning for the lpDepth signal. Baseline keeps the denominator from
 // collapsing in markets with no LP arrivals for a long stretch.
@@ -83,15 +88,47 @@ export function flowTick(args: {
   const pois = poisson(seed, lambda);
   seed = pois.seed;
 
+  // Per-role persistent agent state. Hot-reload safe via safeAgents.
+  const seedObs = market.dynamics?.lastLatentTrueProbability ?? market.forecastProb;
+  const agents: Record<AgentSlotKey, AgentState> = safeAgents(market.agents, seedObs);
+
   const routed: RoutedIntent[] = [];
   const archetypePicks: { archetype: TraderArchetype; out: ArchetypeOutput }[] = [];
   for (let i = 0; i < pois.v; i++) {
     const picked = weightedPick(seed, WEIGHTS[regime]);
     seed = picked.seed;
-    const out = runArchetype(picked.v, { market, regime }, seed);
+    const slot = archetypeToSlot(picked.v);
+    const out = runArchetype(picked.v, { market, regime }, agents[slot], seed, currentTick);
     seed = out.seed;
+    agents[slot] = out.nextAgent;
     archetypePicks.push({ archetype: picked.v, out });
+    // Null intent = skip (cooldown, weak signal, no stale quote, adverse-sel cancel)
+    if (out.intent === null) continue;
     routed.push(route(picked.v, out.intent, regime));
+  }
+
+  // Rebalancer's position accumulates from net market-order flow generated
+  // by OTHER agents — it's the institutional counterparty that absorbs the
+  // bias the rest of the market is generating. Sign convention: when others
+  // BUY, the rebalancer absorbs a SHORT (position -=); when others SELL, it
+  // absorbs a LONG (position +=). Subsequent ticks see this position and
+  // flatten it through the rebalancer handler.
+  let externalNetFlow = 0;
+  for (const r of routed) {
+    if (r.intent.kind !== "market") continue;
+    if (r.archetype === "desk_actor") continue;  // flow.ts never routes desk
+    if (archetypeToSlot(r.archetype) === "rebalancer") continue;
+    externalNetFlow += r.intent.side === "BUY" ? r.intent.qty : -r.intent.qty;
+  }
+  if (externalNetFlow !== 0) {
+    agents.rebalancer = {
+      ...agents.rebalancer,
+      position: clamp(
+        agents.rebalancer.position - externalNetFlow,
+        -REBALANCER_POSITION_CAP,
+        REBALANCER_POSITION_CAP,
+      ),
+    };
   }
 
   // 2) Apply routed intents against the (post-sync) book. Returns desk-
@@ -199,6 +236,7 @@ export function flowTick(args: {
       flowReasonKey,
       flowReasonTick,
       regimeState: safeRegimeState(market.regimeState),
+      agents,
     },
     fills: applied.fills,
     seed,

@@ -46,6 +46,7 @@ export function initializeMarketState(longRunBase: number): ProbabilityDynamicsS
     eventMemory: [],
     lastUpdatedTick: 0,
     lastLatentTrueProbability: seed,
+    prevLatentTrueProbability: seed,
     lastBaseDelta: 0,
     lastLatentDelta: 0,
     lastDrivers: [],
@@ -67,6 +68,9 @@ export function safeDynamicsState(
     eventMemory: Array.isArray(d.eventMemory) ? d.eventMemory.filter(isValidShock) : [],
     lastUpdatedTick: safeFinite(d.lastUpdatedTick, 0),
     lastLatentTrueProbability: clampProb(safeFinite(d.lastLatentTrueProbability, fallbackLongRun)),
+    prevLatentTrueProbability: clampProb(
+      safeFinite(d.prevLatentTrueProbability, safeFinite(d.lastLatentTrueProbability, fallbackLongRun)),
+    ),
     lastBaseDelta: safeFinite(d.lastBaseDelta, 0),
     lastLatentDelta: safeFinite(d.lastLatentDelta, 0),
     lastDrivers: Array.isArray(d.lastDrivers) ? d.lastDrivers : [],
@@ -407,6 +411,10 @@ export function updateMarketState(
     volatilityEstimate: nextVol,
     lastUpdatedTick: currentTick,
     lastLatentTrueProbability: latentTrue,
+    // Snapshot the prior tick's latent before overwriting — used to seed the
+    // informed slot's noisy observation on cold start; never read by handlers
+    // directly during normal operation (informed reads its own obsLatent).
+    prevLatentTrueProbability: prev.lastLatentTrueProbability,
     lastBaseDelta: nextAdaptiveBase - prev.adaptiveBaseProbability,
     lastLatentDelta: latentDelta,
     lastDrivers: drivers,

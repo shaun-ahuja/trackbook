@@ -1,6 +1,7 @@
 import type { DataSourceMode, LineId, Market, SimState } from "../types";
 import { projectVisibleBook, seedInitialBook } from "./orderBookState";
 import { initializeMarketState } from "./probabilityDynamics";
+import { initialAgents } from "./microstructure/agentState";
 
 export const INITIAL_SEED = 0x1ac7;
 
@@ -305,6 +306,7 @@ function makeInitialMarket(spec: MarketSpec): Market {
     flowLog: [],
     lastEdgeAtFlip: 0,
     lastConfAtFlip: 0.55,
+    agents: initialAgents(prob),
   };
 }
 

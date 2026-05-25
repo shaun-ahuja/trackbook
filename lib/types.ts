@@ -131,6 +131,9 @@ export type Market = {
   // hysteresis layer to suppress marginal flips.
   lastEdgeAtFlip: number;
   lastConfAtFlip: number;
+  // Per-role persistent agent state. One slot per AgentSlotKey; archetypes
+  // that share a role share a slot. Seeded in makeInitialMarket.
+  agents: Record<AgentSlotKey, AgentState>;
 };
 
 export type TraderArchetype =
@@ -145,6 +148,32 @@ export type TraderArchetype =
   | "latency_arb"
   | "panic"
   | "desk_actor";
+
+// Behavioral role that an archetype maps onto. Multiple archetypes can share
+// one slot (e.g. liquidity_provider / patient_value / mean_reversion all use
+// `passive`); they share per-market persistent state at that slot.
+export type AgentSlotKey =
+  | "informed"
+  | "momentum"
+  | "noise"
+  | "rebalancer"
+  | "taker"
+  | "passive";
+
+// Per-market persistent state for one role slot. Survives across ticks so
+// agents are not pure tick-local samples: cooldown gates re-fires, conviction
+// scales size + cooldown, recentDir lets momentum detect reversals, position
+// is an open-loop signed counter (incremented on emit) that the rebalancer
+// flattens, and obsLatent is the informed slot's private noisy smoother of
+// the latent truth (no archetype reads lastLatentTrueProbability directly).
+export type AgentState = {
+  cooldownUntilTick: number;
+  recentDir: -1 | 0 | 1;
+  conviction: number;       // [0,1]
+  position: number;         // signed lots
+  obsLatent: number;        // [0,1], probability units
+  lastActedTick: number;
+};
 
 export type MarketRegime = "calm" | "alert" | "shock" | "recovery";
 
@@ -217,6 +246,10 @@ export type ProbabilityDynamicsState = {
 
   // Debug surface (read-only consumers, not used in the update equations).
   lastLatentTrueProbability: number;
+  // Prior tick's latent truth. Seeded equal to lastLatentTrueProbability on
+  // init; archetypes never read it directly (informed reads its own private
+  // noisy smoother), but the noisy-observation signal uses it to bootstrap.
+  prevLatentTrueProbability: number;
   lastBaseDelta: number;
   lastLatentDelta: number;
   lastDrivers: DriverContribution[];
