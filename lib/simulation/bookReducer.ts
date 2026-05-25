@@ -10,7 +10,9 @@ import { rand } from "../rng";
 import { clamp } from "../format";
 import { cancelManyByIds, executeMarket, insertLimit } from "./bookMatching";
 import {
+  type BookSide,
   type BookState,
+  type OrderOwner,
   type RestingOrder,
   bestAskPrice,
   bestBidPrice,
@@ -54,6 +56,8 @@ export type AgeOutput = {
   seed: number;
   expiredCount: number;
   softCancelCount: number;
+  expiredOrderIds: number[];
+  softCancelOrderIds: number[];
 };
 
 // Drop expired orders, then draw soft-cancels on the survivors. Desk orders
@@ -105,12 +109,16 @@ export function ageAndCancel(
     seed: s,
     expiredCount: expiredIds.size,
     softCancelCount: softIds.size,
+    expiredOrderIds: [...expiredIds],
+    softCancelOrderIds: [...softIds],
   };
 }
 
 export type DeskSyncOutput = {
   book: BookState;
   changed: boolean;
+  canceledDeskOrderIds: number[];
+  postedDeskOrders: RestingOrder[];
 };
 
 // Reconcile resting desk orders with the latest ourBid / ourAsk decision.
@@ -134,6 +142,7 @@ export function syncDeskQuote(
   for (const o of book.bids) if (o.owner === "desk") deskIds.add(o.id);
   for (const o of book.asks) if (o.owner === "desk") deskIds.add(o.id);
   const cleared = cancelManyByIds(book, deskIds);
+  const postedDeskOrders: RestingOrder[] = [];
 
   const deskSize = regime === "shock" ? DESK_SIZE_SHOCK : DESK_SIZE_NORMAL;
   let next = cleared;
@@ -147,6 +156,7 @@ export function syncDeskQuote(
       nextOrderId: made.nextId,
       bids: insertIntoSide(next.bids, made.order),
     };
+    postedDeskOrders.push(made.order);
   }
 
   const oppBid = bestBidPrice(next, ourBid - 1);
@@ -158,9 +168,15 @@ export function syncDeskQuote(
       nextOrderId: made.nextId,
       asks: insertIntoSide(next.asks, made.order),
     };
+    postedDeskOrders.push(made.order);
   }
 
-  return { book: next, changed: deskIds.size > 0 || true };
+  return {
+    book: next,
+    changed: deskIds.size > 0 || true,
+    canceledDeskOrderIds: [...deskIds],
+    postedDeskOrders,
+  };
 }
 
 export type ApplyIntentsArgs = {
@@ -178,6 +194,27 @@ export type ApplyIntentsOutput = {
   marketCount: number;
   limitCount: number;
   flowEvents: FlowEvent[];
+  shadowOps: Array<
+    | {
+        kind: "submit_market";
+        side: "BUY" | "SELL";
+        owner: OrderOwner;
+        qty: number;
+        fillKind: FillKind;
+        logicalTime: number;
+      }
+    | {
+        kind: "submit_limit";
+        side: BookSide;
+        owner: OrderOwner;
+        qty: number;
+        priceCents: number;
+        ttlTicks: number;
+        fillKind: FillKind;
+        logicalTime: number;
+        expectedTsOrderId: number | null;
+      }
+  >;
 };
 
 // Walk routed external intents in order. Each market intent → executeMarket;
@@ -191,6 +228,7 @@ export function applyIntents(args: ApplyIntentsArgs): ApplyIntentsOutput {
   let marketCount = 0;
   let limitCount = 0;
   const flowEvents: FlowEvent[] = [];
+  const shadowOps: ApplyIntentsOutput["shadowOps"] = [];
   const intents = args.intents.slice(0, MAX_INTENTS_PER_TICK);
 
   for (let i = 0; i < intents.length; i++) {
@@ -220,6 +258,14 @@ export function applyIntents(args: ApplyIntentsArgs): ApplyIntentsOutput {
       book = res.book;
       fills.push(...res.fills);
       marketCount++;
+      shadowOps.push({
+        kind: "submit_market",
+        side: r.intent.side,
+        owner: r.owner,
+        qty: r.intent.qty,
+        fillKind: "passive",
+        logicalTime: currentTick,
+      });
       flowEvents.push({
         tick: currentTick,
         archetype: r.archetype,
@@ -241,6 +287,17 @@ export function applyIntents(args: ApplyIntentsArgs): ApplyIntentsOutput {
       book = res.book;
       fills.push(...res.fills);
       limitCount++;
+      shadowOps.push({
+        kind: "submit_limit",
+        side: r.intent.side === "BUY" ? "BID" : "ASK",
+        owner: r.owner,
+        qty: r.intent.qty,
+        priceCents: clampPrice(r.intent.priceCents),
+        ttlTicks: r.ttlTicks,
+        fillKind: "passive",
+        logicalTime: currentTick,
+        expectedTsOrderId: res.restedOrderId ?? null,
+      });
       flowEvents.push({
         tick: currentTick,
         archetype: r.archetype,
@@ -251,7 +308,7 @@ export function applyIntents(args: ApplyIntentsArgs): ApplyIntentsOutput {
     }
   }
 
-  return { book, fills, marketCount, limitCount, flowEvents };
+  return { book, fills, marketCount, limitCount, flowEvents, shadowOps };
 }
 
 // Desk-issued aggressive cross. Used when posture is LIFT, HIT, or FLATTEN
@@ -260,6 +317,14 @@ export type DeskCrossOutput = {
   book: BookState;
   fills: Fill[];
   flowEvent: FlowEvent | null;
+  shadowCommand:
+    | {
+        side: "BUY" | "SELL";
+        qty: number;
+        fillKind: FillKind;
+        logicalTime: number;
+      }
+    | null;
 };
 
 export function deskAggressiveCross(args: {
@@ -292,7 +357,9 @@ export function deskAggressiveCross(args: {
     side = "SELL"; qty = 1; fillKind = "aggressive";
   }
 
-  if (!side || qty <= 0) return { book: args.book, fills: [], flowEvent: null };
+  if (!side || qty <= 0) {
+    return { book: args.book, fills: [], flowEvent: null, shadowCommand: null };
+  }
 
   const res = executeMarket(args.book, side, qty, "desk", {
     now: args.now,
@@ -317,6 +384,12 @@ export function deskAggressiveCross(args: {
       qty,
       priceCents: snapToTick(refPrice),
     },
+    shadowCommand: {
+      side,
+      qty,
+      fillKind,
+      logicalTime: args.currentTick,
+    },
   };
 }
 
@@ -330,6 +403,13 @@ export type MagnetOutput = {
   flowEvents: FlowEvent[];
   seed: number;
   fired: boolean;
+  shadowCommands: Array<{
+    side: "BUY" | "SELL";
+    qty: number;
+    fillKind: FillKind;
+    logicalTime: number;
+    owner: "informed";
+  }>;
 };
 
 export function divergenceMagnet(args: {
@@ -343,13 +423,21 @@ export function divergenceMagnet(args: {
   seed: number;
 }): MagnetOutput {
   if (args.mode === "none" || args.divergenceCents === 0) {
-    return { book: args.book, fills: [], flowEvents: [], seed: args.seed, fired: false };
+    return {
+      book: args.book,
+      fills: [],
+      flowEvents: [],
+      seed: args.seed,
+      fired: false,
+      shadowCommands: [],
+    };
   }
 
   let book = args.book;
   let s = args.seed;
   const fills: Fill[] = [];
   const flowEvents: FlowEvent[] = [];
+  const shadowCommands: MagnetOutput["shadowCommands"] = [];
   const side: "BUY" | "SELL" = args.divergenceCents > 0 ? "BUY" : "SELL";
 
   // Steady pressure: 1 order in mild, 2 in strong. Single contract each
@@ -366,6 +454,13 @@ export function divergenceMagnet(args: {
     });
     book = res.book;
     fills.push(...res.fills);
+    shadowCommands.push({
+      side,
+      qty: 1,
+      fillKind: "passive",
+      logicalTime: args.currentTick,
+      owner: "informed",
+    });
     flowEvents.push({
       tick: args.currentTick,
       archetype: "informed_transit",
@@ -392,6 +487,13 @@ export function divergenceMagnet(args: {
       });
       book = sweep.book;
       fills.push(...sweep.fills);
+      shadowCommands.push({
+        side,
+        qty,
+        fillKind: "passive",
+        logicalTime: args.currentTick,
+        owner: "informed",
+      });
       flowEvents.push({
         tick: args.currentTick,
         archetype: "informed_transit",
@@ -402,7 +504,7 @@ export function divergenceMagnet(args: {
     }
   }
 
-  return { book, fills, flowEvents, seed: s, fired: true };
+  return { book, fills, flowEvents, seed: s, fired: true, shadowCommands };
 }
 
 // Sweep desk's resting quote when a sev-3 live event lands. The pre-flow
@@ -418,8 +520,20 @@ export type ShockSweepArgs = {
   now: number;
 };
 
-export function shockSweep(args: ShockSweepArgs): { book: BookState; fills: Fill[] } {
-  if (args.impactSign === 0 || args.qty <= 0) return { book: args.book, fills: [] };
+export function shockSweep(args: ShockSweepArgs): {
+  book: BookState;
+  fills: Fill[];
+  shadowCommand: {
+    side: "BUY" | "SELL";
+    qty: number;
+    fillKind: FillKind;
+    logicalTime: number;
+    owner: "panic";
+  } | null;
+} {
+  if (args.impactSign === 0 || args.qty <= 0) {
+    return { book: args.book, fills: [], shadowCommand: null };
+  }
   // Positive impact → fair moved up → an external buyer sweeps the ask
   // side (so the desk's resting ask gets hit, desk sells).
   // Negative impact → mirror.
@@ -432,7 +546,17 @@ export function shockSweep(args: ShockSweepArgs): { book: BookState; fills: Fill
     deskFillKind: "shock",
     rngTag: args.currentTick * 100 + 88,
   });
-  return { book: res.book, fills: res.fills };
+  return {
+    book: res.book,
+    fills: res.fills,
+    shadowCommand: {
+      side: takerSide,
+      qty: args.qty,
+      fillKind: "shock",
+      logicalTime: args.currentTick,
+      owner: "panic",
+    },
+  };
 }
 
 // Inject one or two LP orders inside the touch if the book is too thin or
@@ -447,7 +571,12 @@ export function replenishIfThin(
   currentTick: number,
   seed: number,
   divCtx?: DivergenceContext,
-): { book: BookState; seed: number; injected: number } {
+): {
+  book: BookState;
+  seed: number;
+  injected: number;
+  postedOrders: RestingOrder[];
+} {
   const bid = bestBidPrice(book, fairCents - 1);
   const ask = bestAskPrice(book, fairCents + 1);
   const spread = ask - bid;
@@ -455,11 +584,14 @@ export function replenishIfThin(
   const thinAsks = book.asks.length < REPLENISH_MIN_LEVELS;
   const wideSpread = spread > REPLENISH_SPREAD_TRIGGER;
 
-  if (!thinBids && !thinAsks && !wideSpread) return { book, seed, injected: 0 };
+  if (!thinBids && !thinAsks && !wideSpread) {
+    return { book, seed, injected: 0, postedOrders: [] };
+  }
 
   let next = book;
   let s = seed;
   let injected = 0;
+  const postedOrders: RestingOrder[] = [];
 
   // One layer one tick inside whichever side needs it; tightens gradually
   // rather than re-pegging at the touch. When magnet is active and the
@@ -493,6 +625,7 @@ export function replenishIfThin(
       ? { ...next, nextOrderId: made.nextId, bids: insertIntoSide(next.bids, made.order) }
       : { ...next, nextOrderId: made.nextId, asks: insertIntoSide(next.asks, made.order) };
     injected++;
+    postedOrders.push(made.order);
   };
 
   if (thinBids || wideSpread) placeInside("BID");
@@ -517,13 +650,14 @@ export function replenishIfThin(
         ? { ...next, nextOrderId: made.nextId, bids: insertIntoSide(next.bids, made.order) }
         : { ...next, nextOrderId: made.nextId, asks: insertIntoSide(next.asks, made.order) };
       injected++;
+      postedOrders.push(made.order);
     }
   }
 
   // Silence unused-import-like warning on clamp; some compilers strip it.
   void clamp;
 
-  return { book: next, seed: s, injected };
+  return { book: next, seed: s, injected, postedOrders };
 }
 
 // Convenience re-export so callers can import projection from one place

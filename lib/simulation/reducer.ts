@@ -23,6 +23,17 @@ import {
 } from "./bookReducer";
 import { projectVisibleBook, safeBookState } from "./orderBookState";
 import { divergenceContext } from "./orderFlow";
+import {
+  bookStateTraceSignature,
+  captureExpectedBook,
+  normalizeExpectedFills,
+  type ShadowCommand,
+  type ShadowMarketTrace,
+  type ShadowPhaseVisit,
+  type ShadowStepLabel,
+  type ShadowTickTrace,
+  type ShadowTraceStep,
+} from "./shadowTrace";
 
 const MAX_EVENTS = 80;
 const MAX_FILLS = 40;
@@ -37,24 +48,77 @@ const HYBRID_QUIET_TICKS = 40;
 const SHOCK_MIN_IMPACT = 0.06;
 
 export function reducer(state: SimState, action: SimAction): SimState {
+  return reduceWithShadow(state, action).nextState;
+}
+
+export function reduceWithShadow(
+  state: SimState,
+  action: SimAction,
+): {
+  nextState: SimState;
+  shadowTrace: ShadowTickTrace | null;
+} {
   switch (action.type) {
     case "TICK":
       return tick(state, action.now);
     case "SELECT":
-      if (!state.markets[action.marketId]) return state;
-      return { ...state, selectedMarketId: action.marketId };
+      if (!state.markets[action.marketId]) return { nextState: state, shadowTrace: null };
+      return { nextState: { ...state, selectedMarketId: action.marketId }, shadowTrace: null };
     case "TOGGLE_PAUSE":
-      return { ...state, paused: !state.paused };
+      return { nextState: { ...state, paused: !state.paused }, shadowTrace: null };
     case "RESEED":
-      return makeInitialState(Date.now(), state.dataSource);
+      return { nextState: makeInitialState(Date.now(), state.dataSource), shadowTrace: null };
     case "INJECT_EVENTS":
-      return injectEvents(state, action.events);
+      return { nextState: injectEvents(state, action.events), shadowTrace: null };
     case "SET_DATA_SOURCE":
-      if (state.dataSource === action.mode) return state;
-      return { ...state, dataSource: action.mode, ticksSinceMtaEvent: 0 };
+      if (state.dataSource === action.mode) return { nextState: state, shadowTrace: null };
+      return {
+        nextState: { ...state, dataSource: action.mode, ticksSinceMtaEvent: 0 },
+        shadowTrace: null,
+      };
     default:
-      return state;
+      return { nextState: state, shadowTrace: null };
   }
+}
+
+function pushShadowStep(
+  steps: ShadowTraceStep[],
+  phaseVisits: ShadowPhaseVisit[],
+  label: ShadowStepLabel,
+  commands: ShadowCommand[],
+  beforeBookState: Market["bookState"],
+  bookState: Market["bookState"],
+  fills: Fill[],
+  accounting?: {
+    inventory: number;
+    avgCost: number;
+    realizedPnl: number;
+  },
+) {
+  const traceEmitted = commands.length > 0 || fills.length > 0 || Boolean(accounting);
+  const phaseIndex = phaseVisits.length;
+  const stepIndex = steps.length;
+  phaseVisits.push({
+    label,
+    phaseIndex,
+    stepIndex: traceEmitted ? stepIndex : null,
+    bookChanged:
+      bookStateTraceSignature(beforeBookState) !== bookStateTraceSignature(bookState),
+    commandCount: commands.length,
+    fillCount: fills.length,
+    accountingIncluded: Boolean(accounting),
+    traceEmitted,
+  });
+  if (!traceEmitted) return;
+  steps.push({
+    label,
+    phaseIndex,
+    stepIndex,
+    commands,
+    expectedBook: captureExpectedBook(bookState),
+    expectedFills: normalizeExpectedFills(fills),
+    expectedAccounting: accounting,
+  });
 }
 
 function injectEvents(state: SimState, incoming: TransitEvent[]): SimState {
@@ -123,8 +187,11 @@ function shouldSpawnSynthetic(state: SimState): boolean {
   return state.ticksSinceMtaEvent >= HYBRID_QUIET_TICKS;
 }
 
-function tick(state: SimState, now: number): SimState {
-  if (state.paused) return state;
+function tick(
+  state: SimState,
+  now: number,
+): { nextState: SimState; shadowTrace: ShadowTickTrace | null } {
+  if (state.paused) return { nextState: state, shadowTrace: null };
   let seed = state.rngState;
   const nextTick = state.tick + 1;
 
@@ -150,9 +217,12 @@ function tick(state: SimState, now: number): SimState {
 
   let newFills = [...state.fills];
   const newMarkets: SimState["markets"] = { ...state.markets };
+  const shadowMarkets: ShadowMarketTrace[] = [];
 
   for (const id of state.marketOrder) {
     let m = newMarkets[id];
+    const shadowSteps: ShadowTraceStep[] = [];
+    const phaseVisits: ShadowPhaseVisit[] = [];
 
     // 1) Apply event shock — appends to ShockMemory; no direct probability mutation.
     let eventImpactMag = 0;
@@ -184,13 +254,49 @@ function tick(state: SimState, now: number): SimState {
     const divCtx = divergenceContext(m.fairValueCents, midSnapshot);
 
     // 3) Age + soft-cancel non-desk resting orders.
+    const bookBeforeAge = m.bookState;
     const aged = ageAndCancel(safeBookState(m.bookState), regime, nextTick, seed, divCtx);
     seed = aged.seed;
     m = { ...m, bookState: aged.book };
+    pushShadowStep(
+      shadowSteps,
+      phaseVisits,
+      "age_cancel",
+      [
+        ...aged.expiredOrderIds.map((tsOrderId) => ({ kind: "cancel", tsOrderId }) as const),
+        ...aged.softCancelOrderIds.map((tsOrderId) => ({ kind: "cancel", tsOrderId }) as const),
+      ],
+      bookBeforeAge,
+      m.bookState,
+      [],
+    );
 
     // 4) Sync desk's resting quote to last tick's decision.
+    const bookBeforeSync = m.bookState;
     const synced = syncDeskQuote(m.bookState, m.ourBid, m.ourAsk, nextTick, regime);
     m = { ...m, bookState: synced.book };
+    pushShadowStep(
+      shadowSteps,
+      phaseVisits,
+      "sync_desk",
+      [
+        ...synced.canceledDeskOrderIds.map((tsOrderId) => ({ kind: "cancel", tsOrderId }) as const),
+        ...synced.postedDeskOrders.map((order) => ({
+          kind: "submit_limit" as const,
+          side: order.side,
+          owner: order.owner,
+          priceCents: order.priceCents,
+          qty: order.size,
+          ttlTicks: order.ttlTicks,
+          logicalTime: order.postedTick,
+          fillKind: "aggressive" as const,
+          expectedTsOrderId: order.id,
+        })),
+      ],
+      bookBeforeSync,
+      m.bookState,
+      [],
+    );
 
     // 5) External arrivals.
     const flow = flowTick({
@@ -202,11 +308,22 @@ function tick(state: SimState, now: number): SimState {
       eventImpactMag,
       divCtx,
     });
+    const bookBeforeFlow = m.bookState;
     m = flow.market;
     seed = flow.seed;
     const tickFills: Fill[] = [...flow.fills];
+    pushShadowStep(
+      shadowSteps,
+      phaseVisits,
+      "apply_intents",
+      flow.shadowTraceCommands ?? [],
+      bookBeforeFlow,
+      m.bookState,
+      flow.fills,
+    );
 
     // 6) Desk's own aggressive cross.
+    const bookBeforeCross = m.bookState;
     const ticksSinceFill = nextTick - m.lastFillTick;
     const cross = deskAggressiveCross({
       book: m.bookState,
@@ -226,6 +343,24 @@ function tick(state: SimState, now: number): SimState {
       };
       tickFills.push(...cross.fills);
     }
+    pushShadowStep(
+      shadowSteps,
+      phaseVisits,
+      "desk_cross",
+      cross.shadowCommand
+        ? [{
+            kind: "submit_market" as const,
+            side: cross.shadowCommand.side,
+            owner: "desk",
+            qty: cross.shadowCommand.qty,
+            logicalTime: cross.shadowCommand.logicalTime,
+            fillKind: cross.shadowCommand.fillKind,
+          }]
+        : [],
+      bookBeforeCross,
+      m.bookState,
+      cross.fills,
+    );
 
     // 7) Drift forecast against the freshly-computed latent truth.
     const drift = driftForecast(m, latentTrueProb, seed);
@@ -238,6 +373,7 @@ function tick(state: SimState, now: number): SimState {
 
     // 8.5) Fair-value magnet.
     if (divCtx.mode !== "none") {
+      const bookBeforeMagnet = m.bookState;
       const mag = divergenceMagnet({
         book: m.bookState,
         divergenceCents: divCtx.divergenceCents,
@@ -257,6 +393,22 @@ function tick(state: SimState, now: number): SimState {
         };
         tickFills.push(...mag.fills);
       }
+      pushShadowStep(
+        shadowSteps,
+        phaseVisits,
+        "divergence_magnet",
+        mag.shadowCommands.map((command) => ({
+          kind: "submit_market" as const,
+          side: command.side,
+          owner: command.owner,
+          qty: command.qty,
+          logicalTime: command.logicalTime,
+          fillKind: command.fillKind,
+        })),
+        bookBeforeMagnet,
+        m.bookState,
+        mag.fills,
+      );
     }
 
     // 9) Shock sweep — sev-3 live event takes out stale desk quotes.
@@ -269,6 +421,7 @@ function tick(state: SimState, now: number): SimState {
     ) {
       const impact = newEvent.impacts[id];
       if (Math.abs(impact) >= SHOCK_MIN_IMPACT) {
+        const bookBeforeShock = m.bookState;
         const sweep = shockSweep({
           book: m.bookState,
           impactSign: impact > 0 ? 1 : -1,
@@ -280,6 +433,24 @@ function tick(state: SimState, now: number): SimState {
         });
         m = { ...m, bookState: sweep.book };
         tickFills.push(...sweep.fills);
+        pushShadowStep(
+          shadowSteps,
+          phaseVisits,
+          "shock_sweep",
+          sweep.shadowCommand
+            ? [{
+                kind: "submit_market" as const,
+                side: sweep.shadowCommand.side,
+                owner: sweep.shadowCommand.owner,
+                qty: sweep.shadowCommand.qty,
+                logicalTime: sweep.shadowCommand.logicalTime,
+                fillKind: sweep.shadowCommand.fillKind,
+              }]
+            : [],
+          bookBeforeShock,
+          m.bookState,
+          sweep.fills,
+        );
       }
     }
 
@@ -291,20 +462,61 @@ function tick(state: SimState, now: number): SimState {
       newFills.unshift(fill);
     }
     if (hadFill) m = { ...m, lastFillTick: nextTick };
+    pushShadowStep(
+      shadowSteps,
+      phaseVisits,
+      "post_fills",
+      [],
+      m.bookState,
+      m.bookState,
+      [],
+      {
+        inventory: m.inventory,
+        avgCost: m.avgCost,
+        realizedPnl: m.realizedPnl,
+      },
+    );
 
     // 11) Recompute unrealized PnL against the post-flow mid.
     const midNow = (m.marketBid + m.marketAsk) / 2;
     m = { ...m, unrealizedPnl: m.inventory * (midNow - m.avgCost) };
 
     // 12) Replenish if the visible spread blew out.
+    const bookBeforeReplenish = m.bookState;
     const repl = replenishIfThin(m.bookState, m.fairValueCents, regime, nextTick, seed, divCtx);
     seed = repl.seed;
     m = { ...m, bookState: repl.book };
+    pushShadowStep(
+      shadowSteps,
+      phaseVisits,
+      "replenish",
+      repl.postedOrders.map((order) => ({
+        kind: "submit_limit" as const,
+        side: order.side,
+        owner: order.owner,
+        priceCents: order.priceCents,
+        qty: order.size,
+        ttlTicks: order.ttlTicks,
+        logicalTime: order.postedTick,
+        fillKind: "aggressive" as const,
+        expectedTsOrderId: order.id,
+      })),
+      bookBeforeReplenish,
+      m.bookState,
+      [],
+    );
 
     // 13) Project visible book for the UI.
     m = { ...m, book: projectVisibleBook(m.bookState) };
 
     newMarkets[id] = m;
+    shadowMarkets.push({
+      marketId: id,
+      marketIndex: shadowMarkets.length,
+      tick: nextTick,
+      phaseVisits,
+      steps: shadowSteps,
+    });
   }
 
   newFills = markAdverseSelection(newFills, newMarkets, nextTick);
@@ -320,14 +532,22 @@ function tick(state: SimState, now: number): SimState {
   }
 
   return {
-    ...state,
-    tick: nextTick,
-    now,
-    rngState: seed,
-    events,
-    fills,
-    regime: newRegime,
-    markets: newMarkets,
-    ticksSinceMtaEvent: state.ticksSinceMtaEvent + 1,
+    nextState: {
+      ...state,
+      tick: nextTick,
+      now,
+      rngState: seed,
+      events,
+      fills,
+      regime: newRegime,
+      markets: newMarkets,
+      ticksSinceMtaEvent: state.ticksSinceMtaEvent + 1,
+    },
+    shadowTrace: {
+      kind: "tick",
+      tick: nextTick,
+      now,
+      markets: shadowMarkets,
+    },
   };
 }

@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer } from "react";
-import { reducer } from "@/lib/simulation/reducer";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { reduceWithShadow } from "@/lib/simulation/reducer";
 import { makeInitialState } from "@/lib/simulation/markets";
+import { ShadowSimulationRuntime } from "@/lib/simulation/shadowRuntime";
 import type { DataSourceMode, Market, TransitEvent } from "@/lib/types";
 import { useMtaAlerts } from "@/hooks/useMtaAlerts";
 import { useMtaTrips } from "@/hooks/useMtaTrips";
@@ -25,7 +26,47 @@ export type UseTrackBookSimulation = {
 };
 
 export function useTrackBookSimulation(): UseTrackBookSimulation {
-  const [state, dispatch] = useReducer(reducer, FIXED_EPOCH, makeInitialState);
+  const [state, setState] = useState(() => makeInitialState(FIXED_EPOCH));
+  const stateRef = useRef(state);
+  const runtimeRef = useRef<ShadowSimulationRuntime | null>(null);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
+    if (!ShadowSimulationRuntime.enabled()) return;
+    let cancelled = false;
+    void ShadowSimulationRuntime.create()
+      .then((runtime) => {
+        if (cancelled) return;
+        runtime.initializeFromState(stateRef.current);
+        runtimeRef.current = runtime;
+      })
+      .catch((error) => {
+        console.error("[shadow] failed to initialize runtime", error);
+      });
+    return () => {
+      cancelled = true;
+      runtimeRef.current = null;
+    };
+  }, []);
+
+  const dispatch = useCallback((action: Parameters<typeof reduceWithShadow>[1]) => {
+    const { nextState, shadowTrace } = reduceWithShadow(stateRef.current, action);
+    stateRef.current = nextState;
+    setState(nextState);
+
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    if (action.type === "RESEED") {
+      runtime.initializeFromState(nextState);
+      return;
+    }
+    if (shadowTrace) {
+      runtime.replayTick(shadowTrace);
+    }
+  }, []);
 
   useEffect(() => {
     if (state.paused) return;
@@ -33,12 +74,12 @@ export function useTrackBookSimulation(): UseTrackBookSimulation {
       dispatch({ type: "TICK", now: Date.now() });
     }, TICK_MS);
     return () => clearInterval(id);
-  }, [state.paused]);
+  }, [dispatch, state.paused]);
 
   const onMtaEvents = useCallback((events: TransitEvent[]) => {
     if (events.length === 0) return;
     dispatch({ type: "INJECT_EVENTS", events });
-  }, []);
+  }, [dispatch]);
 
   useMtaAlerts({
     enabled: !state.paused,
@@ -62,16 +103,16 @@ export function useTrackBookSimulation(): UseTrackBookSimulation {
 
   const selectMarket = useCallback(
     (id: string) => dispatch({ type: "SELECT", marketId: id }),
-    [],
+    [dispatch],
   );
   const togglePause = useCallback(
     () => dispatch({ type: "TOGGLE_PAUSE" }),
-    [],
+    [dispatch],
   );
-  const reseed = useCallback(() => dispatch({ type: "RESEED" }), []);
+  const reseed = useCallback(() => dispatch({ type: "RESEED" }), [dispatch]);
   const setDataSource = useCallback(
     (mode: DataSourceMode) => dispatch({ type: "SET_DATA_SOURCE", mode }),
-    [],
+    [dispatch],
   );
 
   return {

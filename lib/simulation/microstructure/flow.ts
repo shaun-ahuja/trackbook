@@ -52,6 +52,7 @@ export type FlowOutput = {
   market: Market;
   fills: Fill[];
   seed: number;
+  shadowTraceCommands: ReturnType<typeof applyIntents>["shadowOps"];
 };
 
 export function flowTick(args: {
@@ -240,5 +241,6 @@ export function flowTick(args: {
     },
     fills: applied.fills,
     seed,
+    shadowTraceCommands: applied.shadowOps,
   };
 }

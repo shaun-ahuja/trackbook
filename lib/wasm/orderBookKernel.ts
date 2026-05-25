@@ -58,7 +58,11 @@ let modulePromise: Promise<EmscriptenModule> | null = null;
 async function loadModule(): Promise<EmscriptenModule> {
   if (!modulePromise) {
     modulePromise = (async () => {
-      const isBrowser = typeof window !== "undefined";
+      const isNode =
+        typeof process !== "undefined" &&
+        typeof process.versions === "object" &&
+        Boolean(process.versions?.node);
+      const isBrowser = !isNode && typeof window !== "undefined";
       const wasmImportUrl = isBrowser
         ? "/wasm/orderbook/orderbook.mjs"
         : pathToFileURL(
@@ -216,19 +220,42 @@ export class MatchingEngineKernel {
     return this.mod._tb_version();
   }
 
+  createEngine(): number {
+    return this.mod._tb_engine_create();
+  }
+
+  resetHandle(handle: number): void {
+    this.mod._tb_engine_reset(handle);
+  }
+
+  destroyHandle(handle: number): void {
+    this.mod._tb_engine_destroy(handle);
+  }
+
+  executeHandle(
+    handle: number,
+    commands: MatchingEngineCommand[],
+    opts?: { snapshotDepth?: number; fillCapacity?: number },
+  ): MatchingEngineExecResult {
+    if (!handle) {
+      throw new Error("MatchingEngine handle is required.");
+    }
+    return this.executeInternal(handle, commands, opts);
+  }
+
   ensureEngine(marketId: string): number {
     const existing = this.handlesByMarket.get(marketId);
     if (existing) {
       return existing;
     }
-    const handle = this.mod._tb_engine_create();
+    const handle = this.createEngine();
     this.handlesByMarket.set(marketId, handle);
     return handle;
   }
 
   resetEngine(marketId: string): void {
     const handle = this.ensureEngine(marketId);
-    this.mod._tb_engine_reset(handle);
+    this.resetHandle(handle);
   }
 
   destroyEngine(marketId: string): void {
@@ -236,7 +263,7 @@ export class MatchingEngineKernel {
     if (!handle) {
       return;
     }
-    this.mod._tb_engine_destroy(handle);
+    this.destroyHandle(handle);
     this.handlesByMarket.delete(marketId);
   }
 
@@ -258,6 +285,14 @@ export class MatchingEngineKernel {
     opts?: { snapshotDepth?: number; fillCapacity?: number },
   ): MatchingEngineExecResult {
     const handle = this.ensureEngine(marketId);
+    return this.executeInternal(handle, commands, opts);
+  }
+
+  private executeInternal(
+    handle: number,
+    commands: MatchingEngineCommand[],
+    opts?: { snapshotDepth?: number; fillCapacity?: number },
+  ): MatchingEngineExecResult {
     const snapshotDepth = opts?.snapshotDepth ?? DEFAULT_SNAPSHOT_DEPTH;
     const readStateCommand: MatchingEngineCommand = {
       op: MatchingEngineOpcode.ReadState,

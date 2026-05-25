@@ -2,7 +2,7 @@ import {
   type Fill,
   type FillKind,
   type Market,
-} from "../types";
+} from "../types.ts";
 
 // Fill model. Three live sources + one post-hoc tag:
 //   passive    — desk's resting quote crossed by an external market order

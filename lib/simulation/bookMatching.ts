@@ -1,5 +1,5 @@
-import type { Fill, FillKind } from "../types";
-import { mkFill } from "./fills";
+import type { Fill, FillKind } from "../types.ts";
+import { mkFill } from "./fills.ts";
 import {
   type BookSide,
   type BookState,
@@ -7,7 +7,7 @@ import {
   type RestingOrder,
   insertIntoSide,
   removeWhere,
-} from "./orderBookState";
+} from "./orderBookState.ts";
 
 // Pure matching helpers. No RNG inside; callers thread their own seed
 // through ageAndCancel and replenishment in bookReducer.ts.
@@ -43,6 +43,7 @@ export type MatchResult = {
   book: BookState;
   fills: Fill[];
   lastTradePriceCents: number | null;
+  restedOrderId?: number;
 };
 
 // Insert a limit order. If it crosses, match it greedily against the
@@ -134,6 +135,7 @@ export function insertLimit(
     nextBook = side === "BID"
       ? { ...nextBook, nextOrderId: nextBook.nextOrderId + 1, bids: insertIntoSide(nextBook.bids, resting) }
       : { ...nextBook, nextOrderId: nextBook.nextOrderId + 1, asks: insertIntoSide(nextBook.asks, resting) };
+    return { book: nextBook, fills, lastTradePriceCents, restedOrderId: resting.id };
   }
 
   if (lastTradePriceCents !== null) {

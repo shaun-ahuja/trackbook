@@ -1,4 +1,4 @@
-import type { BookLevel, OrderBook } from "../types";
+import type { BookLevel, OrderBook } from "../types.ts";
 
 // Tick size used across all subway-contract books. Most prediction-market
 // venues quote in half-cent or one-cent increments; 0.5¢ gives the desk
@@ -118,6 +118,45 @@ export function sizeAtPrice(
     if (o.priceCents === priceCents) total += o.size;
   }
   return total;
+}
+
+export function deskLiveOrderRefs(book: BookState): {
+  bidOrderId: number | null;
+  askOrderId: number | null;
+} {
+  let bidOrderId: number | null = null;
+  let askOrderId: number | null = null;
+
+  for (const order of book.bids) {
+    if (order.owner === "desk") {
+      bidOrderId = order.id;
+      break;
+    }
+  }
+  for (const order of book.asks) {
+    if (order.owner === "desk") {
+      askOrderId = order.id;
+      break;
+    }
+  }
+
+  return { bidOrderId, askOrderId };
+}
+
+export function queueAheadSize(book: BookState, orderId: number): number | null {
+  for (const levels of [book.bids, book.asks]) {
+    const targetIndex = levels.findIndex((order) => order.id === orderId);
+    if (targetIndex === -1) continue;
+    const targetPrice = levels[targetIndex]!.priceCents;
+    let ahead = 0;
+    for (let index = 0; index < targetIndex; index++) {
+      if (levels[index]!.priceCents === targetPrice) {
+        ahead += levels[index]!.size;
+      }
+    }
+    return ahead;
+  }
+  return null;
 }
 
 // Project the top N levels of each side into the BookLevel[] shape the UI

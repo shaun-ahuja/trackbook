@@ -9,7 +9,8 @@
     "lint": "eslint",
     "build:orderbook-wasm": "node scripts/build-orderbook-wasm.mjs",
     "test:engine:native": "node scripts/test-matching-engine-native.mjs",
-    "test:engine:parity": "node --experimental-strip-types --test lib/wasm/__tests__/matchingEngineParity.test.ts"
+    "test:engine:parity": "node --experimental-strip-types --test lib/wasm/__tests__/matchingEngineParity.test.ts",
+    "test:shadow": "node --import tsx --test lib/simulation/__tests__/shadowTrace.test.ts lib/simulation/__tests__/shadowRuntime.test.ts lib/simulation/__tests__/shadowHardening.test.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -26,6 +27,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "tailwindcss": "^4",
+    "tsx": "^4.22.3",
     "typescript": "^5"
   }
 }
