@@ -1,7 +1,14 @@
 import type { Fill, Market, SimAction, SimState, TransitEvent } from "../types";
 import { makeInitialState } from "./markets";
 import { tickEvents } from "./events";
-import { applyEventToMarket, driftForecast } from "./forecast";
+import { driftForecast } from "./forecast";
+import {
+  applyEventShock,
+  computeContagion,
+  computeNetworkStress,
+  updateMarketState,
+  validateDynamicsState,
+} from "./probabilityDynamics";
 import { decide } from "./marketMaker";
 import { applyFill, markAdverseSelection } from "./fills";
 import { stepRegime } from "./microstructure/regimeFsm";
@@ -56,13 +63,15 @@ function injectEvents(state: SimState, incoming: TransitEvent[]): SimState {
   const newMarkets: SimState["markets"] = { ...state.markets };
   let sawMta = false;
   const maxImpactByMarket: Record<string, number> = {};
+  const touched = new Set<string>();
 
   for (const ev of incoming) {
     if (ev.source === "mta") sawMta = true;
     for (const id of state.marketOrder) {
       const delta = ev.impacts[id];
       if (delta === undefined) continue;
-      newMarkets[id] = applyEventToMarket(newMarkets[id], ev);
+      newMarkets[id] = applyEventShock(newMarkets[id], ev, state.tick);
+      touched.add(id);
       const mag = Math.abs(delta);
       if (mag > (maxImpactByMarket[id] ?? 0)) {
         maxImpactByMarket[id] = mag;
@@ -70,19 +79,26 @@ function injectEvents(state: SimState, incoming: TransitEvent[]): SimState {
     }
   }
 
-  for (const id of state.marketOrder) {
+  // Refresh regime + latent truth for touched markets so subscribers see
+  // the new state immediately rather than waiting for the next tick.
+  const stress = computeNetworkStress(state.now);
+  const contagion = computeContagion(newMarkets, state.marketOrder, state.tick);
+
+  for (const id of touched) {
     const m: Market = newMarkets[id];
     const impactMag = maxImpactByMarket[id] ?? 0;
-    let updated = m;
-    if (impactMag > 0) {
-      const forecastAbsDelta = Math.abs(
-        (m.forecastProb ?? 0) - (m.prevForecastProb ?? m.forecastProb ?? 0),
-      );
-      updated = {
-        ...m,
-        regimeState: stepRegime(m, forecastAbsDelta, impactMag, state.tick),
-      };
-    }
+    const forecastAbsDelta = Math.abs(
+      (m.forecastProb ?? 0) - (m.prevForecastProb ?? m.forecastProb ?? 0),
+    );
+    const nextRegime = stepRegime(m, forecastAbsDelta, impactMag, state.tick);
+    const withRegime: Market = { ...m, regimeState: nextRegime };
+    const updated = updateMarketState(
+      withRegime,
+      nextRegime.regime,
+      contagion[id] ?? 0,
+      stress,
+      state.tick,
+    );
     const mid = (updated.marketBid + updated.marketAsk) / 2;
     newMarkets[id] = {
       ...updated,
@@ -126,17 +142,23 @@ function tick(state: SimState, now: number): SimState {
     ? [newEvent, ...state.events].slice(0, MAX_EVENTS)
     : state.events;
 
+  // Compute network stress + cross-market contagion ONCE per tick, before
+  // the per-market loop. Both use the state at tick start — they are
+  // order-independent across markets.
+  const stress = computeNetworkStress(now);
+  const contagion = computeContagion(state.markets, state.marketOrder, nextTick);
+
   let newFills = [...state.fills];
   const newMarkets: SimState["markets"] = { ...state.markets };
 
   for (const id of state.marketOrder) {
     let m = newMarkets[id];
 
-    // 1) Apply event to truth channels.
+    // 1) Apply event shock — appends to ShockMemory; no direct probability mutation.
     let eventImpactMag = 0;
     if (newEvent && newEvent.impacts[id] !== undefined) {
       eventImpactMag = Math.abs(newEvent.impacts[id]);
-      m = applyEventToMarket(m, newEvent);
+      m = applyEventShock(m, newEvent, nextTick);
     }
 
     // 2) Step per-market regime FSM.
@@ -152,28 +174,25 @@ function tick(state: SimState, now: number): SimState {
     m = { ...m, regimeState: nextRegimeState };
     const regime = nextRegimeState.regime;
 
-    // 2.5) Compute fair-value divergence snapshot. Stays fixed for the
-    //      rest of the tick — magnet uses what the user is currently
-    //      seeing, not an updated mid that moves mid-tick.
+    // 2.5) Adaptive probability dynamics — decays shock memory, drifts
+    //      adaptiveBase, recomputes latentTrueProbability + drivers + vol.
+    m = updateMarketState(m, regime, contagion[id] ?? 0, stress, nextTick);
+    const latentTrueProb = m.dynamics.lastLatentTrueProbability;
+
+    // 2.6) Fair-value divergence snapshot. Fixed for the rest of the tick.
     const midSnapshot = (m.marketBid + m.marketAsk) / 2;
     const divCtx = divergenceContext(m.fairValueCents, midSnapshot);
 
-    // 3) Age + soft-cancel non-desk resting orders. Wrong-side liquidity
-    //    cancels faster when the magnet is engaged.
+    // 3) Age + soft-cancel non-desk resting orders.
     const aged = ageAndCancel(safeBookState(m.bookState), regime, nextTick, seed, divCtx);
     seed = aged.seed;
     m = { ...m, bookState: aged.book };
 
-    // 4) Sync desk's resting quote to last tick's decision. This inserts
-    //    desk orders at the prior ourBid/ourAsk — shock sweeps later in
-    //    the tick hit these "stale" prices, preserving the got-run-over
-    //    feel of the prior implementation.
+    // 4) Sync desk's resting quote to last tick's decision.
     const synced = syncDeskQuote(m.bookState, m.ourBid, m.ourAsk, nextTick, regime);
     m = { ...m, bookState: synced.book };
 
-    // 5) External arrivals — applies Poisson-sampled archetype intents
-    //    against the book. Updates marketBid/marketAsk/vol/priceHistory
-    //    from the post-flow book top.
+    // 5) External arrivals.
     const flow = flowTick({
       market: m,
       seed,
@@ -187,9 +206,7 @@ function tick(state: SimState, now: number): SimState {
     seed = flow.seed;
     const tickFills: Fill[] = [...flow.fills];
 
-    // 6) Desk's own aggressive cross — fires once per tick on LIFT/HIT/
-    //    FLATTEN postures, gated by cooldown. Uses LAST tick's posture
-    //    (decide hasn't run yet); next tick's decide will confirm.
+    // 6) Desk's own aggressive cross.
     const ticksSinceFill = nextTick - m.lastFillTick;
     const cross = deskAggressiveCross({
       book: m.bookState,
@@ -210,20 +227,16 @@ function tick(state: SimState, now: number): SimState {
       tickFills.push(...cross.fills);
     }
 
-    // 7) Drift forecast.
-    const drift = driftForecast(m, seed);
+    // 7) Drift forecast against the freshly-computed latent truth.
+    const drift = driftForecast(m, latentTrueProb, seed);
     m = drift.market;
     seed = drift.seed;
 
-    // 8) Decide posture + quote for next tick. ourBid/ourAsk set here
-    //    are consumed by next tick's syncDeskQuote.
+    // 8) Decide posture + quote for next tick.
     const dec = decide(m, now, nextTick);
     m = dec.market;
 
-    // 8.5) Fair-value magnet. Runs AFTER decide so this tick's posture
-    //      isn't whipsawed by the magnet's prints — the magnet's effect
-    //      shows up in next tick's mid (and therefore next tick's decide
-    //      edge). divCtx is the snapshot from the start of this tick.
+    // 8.5) Fair-value magnet.
     if (divCtx.mode !== "none") {
       const mag = divergenceMagnet({
         book: m.bookState,
@@ -246,9 +259,7 @@ function tick(state: SimState, now: number): SimState {
       }
     }
 
-    // 9) Shock sweep — sev-3 live event runs an external sweep against
-    //    the current book, taking out the desk's resting orders that
-    //    syncDeskQuote inserted from last tick's prices.
+    // 9) Shock sweep — sev-3 live event takes out stale desk quotes.
     if (
       newEvent &&
       newEvent.severity === 3 &&
@@ -285,10 +296,7 @@ function tick(state: SimState, now: number): SimState {
     const midNow = (m.marketBid + m.marketAsk) / 2;
     m = { ...m, unrealizedPnl: m.inventory * (midNow - m.avgCost) };
 
-    // 12) Replenish if the visible spread blew out or a side ran thin.
-    //     Keeps the ladder populated after shock-driven cancels. When
-    //     magnet is engaged, magnet-side LPs post toward fair instead
-    //     of one tick inside.
+    // 12) Replenish if the visible spread blew out.
     const repl = replenishIfThin(m.bookState, m.fairValueCents, regime, nextTick, seed, divCtx);
     seed = repl.seed;
     m = { ...m, bookState: repl.book };
@@ -301,6 +309,15 @@ function tick(state: SimState, now: number): SimState {
 
   newFills = markAdverseSelection(newFills, newMarkets, nextTick);
   const fills = newFills.slice(0, MAX_FILLS);
+
+  if (process.env.NODE_ENV !== "production") {
+    for (const id of state.marketOrder) {
+      const issues = validateDynamicsState(newMarkets[id], nextTick);
+      if (issues.length > 0) {
+        console.error(`[dynamics] market=${id} tick=${nextTick}:`, issues);
+      }
+    }
+  }
 
   return {
     ...state,

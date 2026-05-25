@@ -25,8 +25,8 @@ export type Severity = 1 | 2 | 3;
 export type EventSource = "synthetic" | "mta" | "trip";
 
 // Live news, scheduled maintenance, or aggregated train-movement signal.
-// Determines whether the event pops recentImpact (shocky) or scheduledRisk
-// (persistent baseline), and gates shock-fill eligibility.
+// Determines which decay channel the shock lands in (live half-lives are
+// short; planned half-lives are long), and gates shock-fill eligibility.
 export type EventCategory = "live" | "planned" | "trip";
 
 export type TransitEvent = {
@@ -90,12 +90,10 @@ export type Market = {
   realizedPnl: number;
   unrealizedPnl: number;
   priceHistory: number[];
-  driverNotes: string[];
   lastAction: MarketAction;
   lastActionReason: string;
   narrative: string;
   riskPosture: RiskPosture;
-  baseTrueProb: number;
   lastImpactTs: number;
   lastImpactMagnitude: number;
   lastDecisionTick: number;
@@ -105,17 +103,10 @@ export type Market = {
   // Bucketed signature of the rationale. Narrative text only refreshes when this changes.
   narrativeKey: string;
   book: OrderBook;
-  // Accumulated event impact on probability, in [-0.5, 0.5]. Decays each tick
-  // so the forecast naturally reverts to baseTrueProb when nothing happens.
-  recentImpact: number;
-  // Slow channel: persistent prior shift from planned-work alerts. Doesn't
-  // decay each tick — drains only when the originating alert clears.
-  // Bounded ±0.2 so scheduled risk never dominates live news.
-  scheduledRisk: number;
-  // Hidden ground-truth probability the synthetic counterparties trade against.
-  // forecastProb is the desk's noisy lagging estimate; trueProb is the truth
-  // only informed/latency-arb archetypes see (with their own noise).
-  trueProb: number;
+  // Adaptive probability dynamics state. Owns the three-layer probability
+  // model (longRunBase / adaptiveBase / latentTrue) plus per-shock decay,
+  // latent risk channel, and volatility estimate. See probabilityDynamics.ts.
+  dynamics: ProbabilityDynamicsState;
   // Per-market microstructure regime. Persists across many ticks; drives
   // archetype mix and quote-update cadence.
   regimeState: MarketRegimeState;
@@ -156,6 +147,80 @@ export type TraderArchetype =
   | "desk_actor";
 
 export type MarketRegime = "calm" | "alert" | "shock" | "recovery";
+
+// Per-shock decay tracking. Each event that hits a market appends an entry
+// (signed remaining magnitude, half-life per category/severity). Entries
+// decay every tick and are dropped when |remaining| falls below expireEps.
+export type ShockMemory = {
+  id: string;             // source event id
+  originLine: LineId;
+  category: EventCategory;
+  severity: Severity;
+  kind: EventKind;
+  remaining: number;      // signed, current effect on latent truth
+  initial: number;        // signed magnitude at birth
+  halfLife: number;       // ticks
+  bornTick: number;
+};
+
+// One contribution to the latent-truth composition. Sorted by |delta| and
+// surfaced through the ForecastPanel debug strip.
+export type DriverContribution = {
+  source:
+    | "adaptive_base"
+    | "shock"
+    | "contagion"
+    | "network_stress"
+    | "latent_risk";
+  delta: number;          // signed pp contribution to latent truth this tick
+  label: string;          // short human tag
+};
+
+// Structured environmental pressure on the network. Derived purely from
+// state.now (wall clock) — no random component.
+export type NetworkStressContext = {
+  hourOfDay: number;              // 0..24
+  isRushHour: boolean;
+  rushHourIntensity: number;      // 0..1, triangular around AM/PM peaks
+  isLateNight: boolean;
+  isWeekend: boolean;
+  inMaintenanceWindow: boolean;
+  maintenanceIntensity: number;   // 0..1
+  // Signed net adjustment (in probability units) to apply to latent truth.
+  // Composed from the booleans + intensities + configured biases.
+  netBias: number;
+};
+
+// Adaptive probability dynamics state per market.
+//
+//   longRunBaseProbability   immutable anchor — copy of MarketSpec.baseTrueProb
+//   adaptiveBaseProbability  stored, mean-reverts toward (longRun + latentRisk*coeff)
+//   latentTrueProbability    NOT a stored field — derived per tick from
+//                            adaptiveBase + shock overlays + contagion + stress
+//
+// Volatility is a *measurement* (EWMA of |Δlatent|) — it scales jump caps,
+// confidence, and spreads. It does NOT appear as a driving term in the
+// latent-truth equation.
+//
+// Regime is NOT mirrored here — read from market.regimeState.regime.
+export type ProbabilityDynamicsState = {
+  longRunBaseProbability: number;
+  adaptiveBaseProbability: number;
+  // Slow planned/structural risk channel. Bounded ±0.2. Integrates planned
+  // events with a long half-life and biases the adaptiveBase drift target.
+  latentRisk: number;
+  // EWMA of |Δ latentTrueProbability|.
+  volatilityEstimate: number;
+  // Per-shock decay entries — overlay on top of adaptiveBase to form latent.
+  eventMemory: ShockMemory[];
+  lastUpdatedTick: number;
+
+  // Debug surface (read-only consumers, not used in the update equations).
+  lastLatentTrueProbability: number;
+  lastBaseDelta: number;
+  lastLatentDelta: number;
+  lastDrivers: DriverContribution[];
+};
 
 export type MarketRegimeState = {
   regime: MarketRegime;

@@ -74,10 +74,10 @@ const SEV_IMPACT: Record<Severity, number> = {
   3: 0.14,
 };
 
-// Planned-work pressure is small and persistent. It feeds the
-// scheduledRisk channel in forecast.ts (capped at ±0.2 per market),
-// not the shocky recentImpact channel, so a single alert moves the
-// prior by ~1.5pp rather than ~3-15pp for a live event.
+// Planned-work pressure is small and persistent. Lands as a "planned"
+// category shock with a long half-life and also nudges the latentRisk
+// channel in the dynamics engine — moves the prior by ~1.5pp rather than
+// ~3-15pp for a live event.
 const PLANNED_IMPACT = 0.015;
 
 // Per-route share of a citywide weather alert. Smaller than the raw
@@ -171,7 +171,7 @@ export function mapMtaAlertToTransitEvent(
 }
 
 // Synthesize a CLEAR event for an alert that just disappeared from the
-// feed. Magnitude must equal the original injection so the scheduledRisk
+// feed. Magnitude must equal the original injection so the latentRisk
 // channel drains cleanly when a planned alert ends.
 export function makeMtaClearEvent(
   alert: NormalizedAlert,

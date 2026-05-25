@@ -1,28 +1,29 @@
-import type { Market, MarketRegime, TransitEvent } from "../types";
+import type { Market, MarketRegime } from "../types";
 import { gaussian } from "../rng";
 import { clamp } from "../format";
-import { templateTagFor } from "./events";
+import { DYNAMICS_CONFIG } from "./dynamicsConfig";
 
-// Forecast model (Phase 1 microstructure).
+// Forecast layer.
 //
-//   trueProb     = clamp(baseTrueProb + recentImpact + scheduledRisk + regimeBias, …)
-//   forecastProb = Kalman-style smoothed estimate of trueProb
-//   confidence   = EWMA of (1 − tracking-error/0.2)
+// The adaptive layer (probabilityDynamics.ts) owns truth: it computes a
+// latentTrueProbability each tick from adaptiveBase + shock overlays +
+// contagion + network stress. This file is the *desk's noisy estimate*
+// of that truth — a Kalman-style smoothing pass.
 //
-// applyEventToMarket updates the *hidden* trueProb only — forecastProb
-// catches up over a few ticks via driftForecast. This is what makes the
-// market feel like the desk is reading a noisy signal instead of warping
-// to the answer instantly.
+// Splitting them keeps the contract clear:
+//   - latent truth = the world as it actually is right now
+//   - forecastProb = the desk's lagging belief about latent truth
+//
+// Confidence is an EWMA of tracking quality (|forecast - latent|), damped
+// further when volatilityEstimate is high — uncertainty rises when the
+// truth itself is moving around a lot.
 
-const IMPACT_DECAY = 0.92;
-const IMPACT_BOUND = 0.5;
-const SCHEDULED_RISK_BOUND = 0.2;
 const CONF_FLOOR = 0.2;
 const CONF_CAP = 0.92;
-const TRACKING_ERROR_BAND = 0.2;     // |forecast - trueProb| past which conf → 0
+const TRACKING_ERROR_BAND = 0.2;     // |forecast - latent| past which conf → 0
 const CONF_EWMA_ALPHA = 0.1;
 
-// Calm-regime deadband: when |forecast - trueProb| is inside this band and
+// Calm-regime deadband: when |forecast - latent| is inside this band and
 // the desk is calm, freeze the forecast for this tick. Shock/alert still
 // drift normally so reactive markets can keep up.
 const CALM_DEADBAND = 0.004;
@@ -31,110 +32,23 @@ function safeFinite(n: number | undefined, fallback: number): number {
   return Number.isFinite(n) ? (n as number) : fallback;
 }
 
-function regimeBias(regime: MarketRegime): number {
-  return regime === "shock" ? 0.01 : 0;
-}
-
-function computeTrueProb(market: Market, recentImpact: number, scheduled: number): number {
-  const regime = market.regimeState?.regime ?? "calm";
-  return clamp(
-    market.baseTrueProb + recentImpact + scheduled + regimeBias(regime),
-    0.02,
-    0.98,
-  );
-}
-
-export function applyEventToMarket(
-  market: Market,
-  event: TransitEvent,
-): Market {
-  const delta = event.impacts[market.id];
-  if (delta === undefined) return market;
-  const category = event.category ?? "live";
-
-  if (category === "planned") {
-    return applyPlannedToMarket(market, event, delta);
-  }
-
-  // Live news: push the live channel (recentImpact). trueProb is
-  // recomputed from the new total. We deliberately do NOT bump
-  // forecastProb here — forecastProb catches up via driftForecast's
-  // Kalman step. Confidence likewise no longer jumps on event direction;
-  // it now tracks |forecast - trueProb| through driftForecast.
-  const prevImpact = safeFinite(market.recentImpact, 0);
-  const prevScheduled = safeFinite(market.scheduledRisk, 0);
-  const newImpact = clamp(prevImpact + delta, -IMPACT_BOUND, IMPACT_BOUND);
-  const newTrueProb = computeTrueProb(market, newImpact, prevScheduled);
-
-  const tag = templateTagFor(event);
-  const driverNotes = [tag, ...market.driverNotes].slice(0, 3);
-
-  return {
-    ...market,
-    recentImpact: newImpact,
-    trueProb: newTrueProb,
-    driverNotes,
-    lastImpactTs: event.ts,
-    lastImpactMagnitude: delta,
-  };
-}
-
-function applyPlannedToMarket(
-  market: Market,
-  event: TransitEvent,
-  delta: number,
-): Market {
-  const prevImpact = safeFinite(market.recentImpact, 0);
-  const prevScheduled = safeFinite(market.scheduledRisk, 0);
-  const newScheduled = clamp(
-    prevScheduled + delta,
-    -SCHEDULED_RISK_BOUND,
-    SCHEDULED_RISK_BOUND,
-  );
-  const newTrueProb = computeTrueProb(market, prevImpact, newScheduled);
-
-  // Planned alerts only refresh driverNotes when they noticeably move the
-  // prior — otherwise they'd evict live signals out of the 3-slot list.
-  const driverNotes =
-    Math.abs(newScheduled - prevScheduled) >= 0.01
-      ? [`${templateTagFor(event)} (planned)`, ...market.driverNotes].slice(0, 3)
-      : market.driverNotes;
-
-  return {
-    ...market,
-    scheduledRisk: newScheduled,
-    trueProb: newTrueProb,
-    driverNotes,
-  };
-}
-
+// Kalman-style update of forecastProb toward an externally-provided latent
+// truth. Pure except for the Gaussian seed advancement.
 export function driftForecast(
   market: Market,
+  latentTrueProb: number,
   seed: number,
 ): { market: Market; seed: number } {
-  const prevImpact = safeFinite(market.recentImpact, 0);
-  const scheduled = safeFinite(market.scheduledRisk, 0);
   const conf = safeFinite(market.confidence, 0.55);
-  const regime = market.regimeState?.regime ?? "calm";
+  const regime: MarketRegime = market.regimeState?.regime ?? "calm";
+  const volEst = safeFinite(market.dynamics?.volatilityEstimate, 0);
 
-  // Decay live impact and recompute trueProb. scheduledRisk does NOT decay
-  // each tick — it drains only when a planned alert clears.
-  const newImpact = clamp(
-    prevImpact * IMPACT_DECAY,
-    -IMPACT_BOUND,
-    IMPACT_BOUND,
-  );
-  const newTrueProb = computeTrueProb(market, newImpact, scheduled);
-
-  // Kalman-style update: forecast moves α-fraction toward trueProb plus
-  // a small Gaussian. α is wider in shock and at high confidence so the
-  // desk keeps up; capped at 0.30 to prevent same-tick over-learning.
-  // In calm + inside the deadband, freeze the forecast entirely — the
-  // displayed fair value stays put for stretches when nothing material is
-  // happening (no event, no tracking gap).
-  const prevForecast = safeFinite(market.forecastProb, market.baseTrueProb);
-  const trackingGap = Math.abs(newTrueProb - prevForecast);
+  const prevForecast = safeFinite(market.forecastProb, latentTrueProb);
+  const trackingGap = Math.abs(latentTrueProb - prevForecast);
   const inCalmDeadband = regime === "calm" && trackingGap < CALM_DEADBAND;
+
+  // Alpha widens with confidence and shock regime; capped at 0.30 so a
+  // single tick can't over-learn. Calm deadband freezes the forecast.
   const alpha = inCalmDeadband
     ? 0
     : clamp(
@@ -142,8 +56,9 @@ export function driftForecast(
         0,
         0.30,
       );
-  // Noise is now tiny in calm (was 0.003 baseline); shock/alert keep the
-  // larger noise so reactive markets stay lively.
+
+  // Noise tiny in calm; larger in shock/alert. No dependence on volEst —
+  // vol shapes confidence, not the noise we add to our own quote.
   const noiseScale = inCalmDeadband
     ? 0
     : regime === "calm"
@@ -151,23 +66,22 @@ export function driftForecast(
       : 0.003 + 0.006 * (1 - conf) + (regime === "shock" ? 0.004 : 0);
   const g = gaussian(seed);
   const newForecast = clamp(
-    prevForecast + alpha * (newTrueProb - prevForecast) + g.v * noiseScale,
+    prevForecast + alpha * (latentTrueProb - prevForecast) + g.v * noiseScale,
     0.02,
     0.98,
   );
 
-  // Confidence as EWMA of tracking quality. 1 when forecast hugs trueProb;
-  // 0 when off by ≥0.20. Floored at 0.2, capped at 0.92.
+  // Confidence as EWMA of tracking quality, then damped by volatility.
+  // Higher vol → confidence pulled down (proportional to how much the
+  // latent truth itself has been swinging recently).
   const trackingErr = Math.min(
     TRACKING_ERROR_BAND,
-    Math.abs(newForecast - newTrueProb),
+    Math.abs(newForecast - latentTrueProb),
   );
   const trackQuality = 1 - trackingErr / TRACKING_ERROR_BAND;
-  const newConf = clamp(
-    (1 - CONF_EWMA_ALPHA) * conf + CONF_EWMA_ALPHA * trackQuality,
-    CONF_FLOOR,
-    CONF_CAP,
-  );
+  const volPenalty = clamp(volEst * DYNAMICS_CONFIG.volatility.confidenceDamp, 0, 0.5);
+  const rawConf = (1 - CONF_EWMA_ALPHA) * conf + CONF_EWMA_ALPHA * trackQuality;
+  const newConf = clamp(rawConf - volPenalty * CONF_EWMA_ALPHA, CONF_FLOOR, CONF_CAP);
 
   return {
     market: {
@@ -175,8 +89,6 @@ export function driftForecast(
       prevForecastProb: prevForecast,
       forecastProb: newForecast,
       confidence: newConf,
-      recentImpact: newImpact,
-      trueProb: newTrueProb,
     },
     seed: g.seed,
   };

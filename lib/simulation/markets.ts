@@ -1,12 +1,21 @@
-import type { DataSourceMode, Market, SimState } from "../types";
+import type { DataSourceMode, LineId, Market, SimState } from "../types";
 import { projectVisibleBook, seedInitialBook } from "./orderBookState";
+import { initializeMarketState } from "./probabilityDynamics";
 
 export const INITIAL_SEED = 0x1ac7;
 
-type MarketSpec = Pick<
-  Market,
-  "id" | "line" | "lineLabel" | "lineColor" | "contract" | "expiry" | "baseTrueProb"
->;
+// Static per-market spec. `baseTrueProb` is the long-run base probability —
+// the immutable anchor seeded into ProbabilityDynamicsState.longRunBaseProbability.
+// It is NOT carried as a field on Market; dynamics owns the adaptive layer.
+type MarketSpec = {
+  id: string;
+  line: LineId;
+  lineLabel: string;
+  lineColor: string;
+  contract: string;
+  expiry: string;
+  baseTrueProb: number;
+};
 
 // Per-route markets. Each NYC subway route quoted on the desk is its own
 // independent contract. Trunk line + color are visual metadata only —
@@ -251,8 +260,10 @@ function makeInitialMarket(spec: MarketSpec): Market {
   const prob = spec.baseTrueProb;
   const mid = Math.round(prob * 100);
   const bookState = seedInitialBook(mid);
+  const { baseTrueProb: _baseTrueProb, ...specWithoutBase } = spec;
+  void _baseTrueProb;
   return {
-    ...spec,
+    ...specWithoutBase,
     forecastProb: prob,
     prevForecastProb: prob,
     confidence: 0.55,
@@ -266,7 +277,6 @@ function makeInitialMarket(spec: MarketSpec): Market {
     realizedPnl: 0,
     unrealizedPnl: 0,
     priceHistory: new Array(60).fill(mid),
-    driverNotes: ["baseline prior", "no live events yet"],
     lastAction: "WIDEN",
     lastActionReason: "warming up — low confidence",
     narrative:
@@ -280,9 +290,7 @@ function makeInitialMarket(spec: MarketSpec): Market {
     narrativeKey: "",
     book: projectVisibleBook(bookState),
     bookState,
-    recentImpact: 0,
-    scheduledRisk: 0,
-    trueProb: prob,
+    dynamics: initializeMarketState(prob),
     regimeState: {
       regime: "calm",
       enteredTick: 0,

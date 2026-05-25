@@ -1,6 +1,7 @@
 import type { Market, MarketRegime, TraderArchetype } from "../../types";
 import { rand } from "../../rng";
 import { clamp } from "../../format";
+import { signOfRecentShocks } from "../probabilityDynamics";
 
 // A single trader's instruction this tick. "market" crosses the spread;
 // "limit" rests at the named price (matched only if it crosses).
@@ -81,9 +82,9 @@ const HANDLERS: Record<ExternalArchetype, Handler> = {
   },
 
   event_follower: (ctx, seed) => {
-    // Trades with the sign of recent impact (live news direction).
-    const side: "BUY" | "SELL" =
-      ctx.market.recentImpact >= 0 ? "BUY" : "SELL";
+    // Trades with the sign of recent live shocks.
+    const sign = signOfRecentShocks(ctx.market.dynamics);
+    const side: "BUY" | "SELL" = sign >= 0 ? "BUY" : "SELL";
     return {
       intent: { kind: "market", side, qty: 1, priceCents: midCents(ctx.market) },
       seed,
@@ -182,9 +183,9 @@ const HANDLERS: Record<ExternalArchetype, Handler> = {
   },
 
   informed_transit: (ctx, seed) => {
-    // Sees trueProb with low noise; trades the signed truth edge.
+    // Sees latent truth with low noise; trades the signed truth edge.
     const mid = midCents(ctx.market);
-    const truthCents = ctx.market.trueProb * 100;
+    const truthCents = ctx.market.dynamics.lastLatentTrueProbability * 100;
     const edge = truthCents - mid;
     if (Math.abs(edge) < 0.5) {
       const r = rand(seed);
@@ -212,7 +213,7 @@ const HANDLERS: Record<ExternalArchetype, Handler> = {
   latency_arb: (ctx, seed) => {
     // Smaller, faster version of informed — takes 1 lot on any signed edge.
     const mid = midCents(ctx.market);
-    const truthCents = ctx.market.trueProb * 100;
+    const truthCents = ctx.market.dynamics.lastLatentTrueProbability * 100;
     const edge = truthCents - mid;
     return {
       intent: {
@@ -226,10 +227,10 @@ const HANDLERS: Record<ExternalArchetype, Handler> = {
   },
 
   panic: (ctx, seed) => {
-    // Sells aggressively when recent impact is negative; otherwise
+    // Sells aggressively when recent live shocks are negative; otherwise
     // ~50/50 market order. Weighted heavily only in shock regime.
     const r = rand(seed);
-    if (ctx.market.recentImpact < 0 || r.v < 0.5) {
+    if (signOfRecentShocks(ctx.market.dynamics) < 0 || r.v < 0.5) {
       return {
         intent: {
           kind: "market",
