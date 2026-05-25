@@ -1,5 +1,5 @@
 import type { DataSourceMode, Market, SimState } from "../types";
-import { emptyBook } from "./orderBook";
+import { projectVisibleBook, seedInitialBook } from "./orderBookState";
 
 export const INITIAL_SEED = 0x1ac7;
 
@@ -250,6 +250,7 @@ const MARKET_SPECS: MarketSpec[] = [
 function makeInitialMarket(spec: MarketSpec): Market {
   const prob = spec.baseTrueProb;
   const mid = Math.round(prob * 100);
+  const bookState = seedInitialBook(mid);
   return {
     ...spec,
     forecastProb: prob,
@@ -277,7 +278,8 @@ function makeInitialMarket(spec: MarketSpec): Market {
     lastFillTick: -10,
     vol: 0.5,
     narrativeKey: "",
-    book: emptyBook(mid),
+    book: projectVisibleBook(bookState),
+    bookState,
     recentImpact: 0,
     scheduledRisk: 0,
     trueProb: prob,

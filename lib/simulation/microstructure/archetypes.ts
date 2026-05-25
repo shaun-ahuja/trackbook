@@ -3,15 +3,19 @@ import { rand } from "../../rng";
 import { clamp } from "../../format";
 
 // A single trader's instruction this tick. "market" crosses the spread;
-// "limit" adds depth at a price.
+// "limit" rests at the named price (matched only if it crosses).
 export type Intent = {
   kind: "market" | "limit";
   side: "BUY" | "SELL";
   qty: number;
-  // For "market": the prevailing touch (informational only — the actual
-  // execution price for the desk is set by walk-the-desk in flow.ts).
+  // For "market": the prevailing touch (informational — actual execution
+  // price comes from walking the book in bookMatching.ts).
   // For "limit": the resting price.
   priceCents: number;
+  // Optional hint for limit orders: how many ticks before forced expiry.
+  // Adapter (orderFlow.ts) supplies a regime-appropriate default when this
+  // is unset, so most handlers can ignore it.
+  ttlTicks?: number;
 };
 
 export type ArchetypeContext = {
@@ -30,15 +34,35 @@ function midCents(m: Market): number {
 
 const HANDLERS: Record<ExternalArchetype, Handler> = {
   noise: (ctx, seed) => {
-    const r = rand(seed);
+    // 50/50 market vs limit — the brief models noise as "places/cancels
+    // orders", so half the time it crosses, half the time it adds shallow
+    // depth one tick inside the touch. Soft-cancel pressure in bookReducer
+    // handles the cancel side.
+    const r1 = rand(seed);
+    const r2 = rand(r1.seed);
+    const buySide = r2.v < 0.5;
+    if (r1.v < 0.5) {
+      return {
+        intent: {
+          kind: "market",
+          side: buySide ? "BUY" : "SELL",
+          qty: 1,
+          priceCents: midCents(ctx.market),
+        },
+        seed: r2.seed,
+      };
+    }
+    const limitPx = buySide
+      ? ctx.market.marketBid + 0.5
+      : ctx.market.marketAsk - 0.5;
     return {
       intent: {
-        kind: "market",
-        side: r.v < 0.5 ? "BUY" : "SELL",
+        kind: "limit",
+        side: buySide ? "BUY" : "SELL",
         qty: 1,
-        priceCents: midCents(ctx.market),
+        priceCents: clamp(limitPx, 1, 99),
       },
-      seed: r.seed,
+      seed: r2.seed,
     };
   },
 
@@ -117,13 +141,23 @@ const HANDLERS: Record<ExternalArchetype, Handler> = {
   },
 
   mean_reversion: (ctx, seed) => {
-    // Fades recent drift.
+    // Fades recent drift by posting a limit on the contrary side, one
+    // tick inside the touch. If the drift continues, the limit stays
+    // resting and gets aged out; if the move reverses, it gets filled.
     const h = ctx.market.priceHistory;
     const last = h[h.length - 1] ?? midCents(ctx.market);
     const prior = h[h.length - 4] ?? last;
-    const side: "BUY" | "SELL" = last >= prior ? "SELL" : "BUY";
+    const buySide = last < prior;
+    const limitPx = buySide
+      ? ctx.market.marketBid + 0.5
+      : ctx.market.marketAsk - 0.5;
     return {
-      intent: { kind: "market", side, qty: 1, priceCents: midCents(ctx.market) },
+      intent: {
+        kind: "limit",
+        side: buySide ? "BUY" : "SELL",
+        qty: 1,
+        priceCents: clamp(limitPx, 1, 99),
+      },
       seed,
     };
   },

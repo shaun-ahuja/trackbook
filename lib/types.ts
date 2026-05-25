@@ -122,6 +122,10 @@ export type Market = {
   // EWMA of liquidity-provider arrivals — feeds order-book depth display
   // and the Kyle-style impact denominator.
   lpDepth: number;
+  // Persistent matching-engine state. Sources marketBid/marketAsk/mid and
+  // the visible `book` projection every tick. Initialised with a small
+  // LP seed in makeInitialMarket so the first render is populated.
+  bookState: import("./simulation/orderBookState").BookState;
   // Short bucketed string explaining what drove (or didn't drive) market
   // movement this tick. Distinct from lastActionReason (the desk's reason).
   flowReason: string;

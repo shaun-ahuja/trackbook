@@ -2,26 +2,18 @@ import {
   type Fill,
   type FillKind,
   type Market,
-  type MarketAction,
-  type TransitEvent,
 } from "../types";
-import { randInt } from "../rng";
-import { clamp } from "../format";
 
 // Fill model. Three live sources + one post-hoc tag:
 //   passive    — desk's resting quote crossed by an external market order
-//                in flow.ts (walk-the-desk gate)
-//   aggressive — desk crosses the spread via desk_actor in flow.ts
-//                (LIFT/HIT postures, cooldown-throttled)
-//   flatten    — desk_actor in flow.ts emits a market order opposite
-//                inventory while FLATTEN is engaged
-//   shock      — sev-3 live event sweeps our stale resting quote here,
-//                outside the flow tick (handled below)
+//                (matched via bookMatching.insertLimit / executeMarket)
+//   aggressive — desk crosses the spread via deskAggressiveCross in
+//                bookReducer.ts (LIFT/HIT postures, cooldown-throttled)
+//   flatten    — desk's market cross while FLATTEN is engaged
+//   shock      — sev-3 live event sweeps the desk's stale resting quote
+//                via bookReducer.shockSweep
 // `adverse` is set later by markAdverseSelection when a passive fill's
 // mark moves against the desk over the next few ticks.
-
-// Shock executions ignore cooldown — they're driven by the event itself.
-const SHOCK_MIN_IMPACT = 0.06;
 
 export function mkFill(args: {
   now: number;
@@ -83,78 +75,6 @@ export function applyFill(market: Market, fill: Fill): Market {
     inventory: invNew,
     avgCost: avgNew,
     realizedPnl: market.realizedPnl + realizedDelta,
-  };
-}
-
-type ShockGenInput = {
-  // Pre-flow snapshot — shock fills execute against the *stale* resting
-  // quote (we got run over before we could pull it).
-  prev: Market;
-  cur: Market;
-  action: MarketAction;
-  event: TransitEvent | null;
-  now: number;
-  currentTick: number;
-  seed: number;
-};
-
-type ShockGenOutput = {
-  fill: Fill | null;
-  seed: number;
-};
-
-// Force-fire a shock execution when a sev-3 live event materially impacts
-// our market and we're posted. Bypasses flow so the "got run over" feel
-// stays sharp — the trader sees their stale quote hit before they could
-// react. Planned/trip events are excluded: they're smooth signals, not
-// sudden enough to take a quote that way.
-export function generateShockFill(input: ShockGenInput): ShockGenOutput {
-  const { prev, cur, action, event, now, currentTick } = input;
-  let seed = input.seed;
-
-  if (!event || event.severity !== 3) return { fill: null, seed };
-  if ((event.category ?? "live") !== "live") return { fill: null, seed };
-  if (event.impacts[cur.id] === undefined) return { fill: null, seed };
-  if (action === "FLATTEN") return { fill: null, seed };
-
-  const impact = event.impacts[cur.id];
-  if (Math.abs(impact) < SHOCK_MIN_IMPACT) return { fill: null, seed };
-
-  const fair = cur.fairValueCents;
-  const r = randInt(seed, 0, 0x7fffffff);
-  seed = r.seed;
-
-  // impact > 0 → fair jumped UP → our ask was stale-cheap → we get
-  // lifted (we sell). impact < 0 → mirror.
-  if (impact > 0) {
-    return {
-      fill: mkFill({
-        now,
-        tick: currentTick,
-        marketId: cur.id,
-        side: "SELL",
-        qty: 2,
-        price: clamp(prev.ourAsk, 1, 99),
-        kind: "shock",
-        markFair: fair,
-        rngTag: r.v,
-      }),
-      seed,
-    };
-  }
-  return {
-    fill: mkFill({
-      now,
-      tick: currentTick,
-      marketId: cur.id,
-      side: "BUY",
-      qty: 2,
-      price: clamp(prev.ourBid, 1, 99),
-      kind: "shock",
-      markFair: fair,
-      rngTag: r.v,
-    }),
-    seed,
   };
 }
 
