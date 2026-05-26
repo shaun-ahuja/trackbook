@@ -8,7 +8,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TrackBook · NYC Transit Markets",
+  title: "TransitAlpha · NYC Transit Markets",
   description:
     "AI-driven market making desk for synthetic NYC subway delay contracts.",
 };

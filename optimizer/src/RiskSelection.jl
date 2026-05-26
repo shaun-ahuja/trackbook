@@ -2,6 +2,7 @@ module RiskSelection
 
 using JuMP
 using HiGHS
+const MOI = JuMP.MOI
 using LinearAlgebra
 using Statistics
 using ..Types
@@ -24,7 +25,7 @@ end
 function jump_cvar_select(
     matrix::ScenarioMatrix;
     α::Float64 = 0.10,
-    ρ_max::Float64 = 5.0,   # max CVaR loss tolerance (in reward units)
+    ρ_max::Float64 = 50.0,  # max CVaR loss tolerance; permissive so LP stays feasible, named constraints do the work
 )
     N = matrix.N
     M = matrix.M
@@ -105,6 +106,14 @@ function jump_cvar_select(
     optimize!(model)
 
     status = string(termination_status(model))
+
+    # Guard: if solver found no solution (INFEASIBLE / INFEASIBLE_OR_UNBOUNDED
+    # / NUMERICAL_ERROR etc.) fall back to greedy immediately rather than
+    # crashing when trying to read variable values from an empty model.
+    if !(termination_status(model) in [MOI.OPTIMAL, MOI.ALMOST_OPTIMAL, MOI.LOCALLY_SOLVED])
+        return (greedy_select(matrix), ones(N) ./ N, BindingConstraint[], "GREEDY_FALLBACK")
+    end
+
     w_val = value.(w)
 
     # Detect binding constraints via non-zero dual values (LP shadow prices)

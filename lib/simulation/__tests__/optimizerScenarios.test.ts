@@ -66,18 +66,17 @@ test("CALM_EDGE: all R values are finite", () => {
 // Scenario 2: SHOCK
 // ────────────────────────────────────────────────────────────────────────────
 
-test("SHOCK: AGG_BUY and AGG_SELL filtered (shock regime + conf=0.32 < 0.5)", () => {
+test("SHOCK: AGG_BUY and AGG_SELL are in candidate set (JuMP shock_aggr_limit suppresses them)", () => {
   const { state, marketId } = applyScenario("SHOCK");
   const matrix = buildScenarioMatrix(state, marketId, 3, 5, DEFAULT_REWARD_PARAMS, 0.97);
 
+  // Pre-filter no longer removes AGG plans — they stay in the candidate set so
+  // JuMP's shock_aggr_limit constraint is visible (binding) in the explanation.
+  // Only structural impossibility (inv >= maxInv) is filtered at TS level.
   const aggPlans = matrix.plans.filter(
     (p) => p.firstAction === "AGG_BUY" || p.firstAction === "AGG_SELL",
   );
-  assert.strictEqual(
-    aggPlans.length,
-    0,
-    "AGG_BUY/AGG_SELL must be filtered: shock + conf < 0.5 triggers isFeasible=false",
-  );
+  assert.ok(aggPlans.length > 0, "AGG plans in candidate set so shock_aggr_limit can bind in JuMP");
 });
 
 test("SHOCK: defensive actions (WIDEN, PASS) are present", () => {
@@ -104,18 +103,16 @@ test("SHOCK: context reflects shock state", () => {
 // Scenario 3: INV_STRESS
 // ────────────────────────────────────────────────────────────────────────────
 
-test("INV_STRESS: AGG_BUY and SKEW_BID filtered (inv=7 >= maxInv-2=6)", () => {
+test("INV_STRESS: AGG_BUY and SKEW_BID in candidate set (JuMP inventory_skew suppresses them)", () => {
   const { state, marketId } = applyScenario("INV_STRESS");
   const matrix = buildScenarioMatrix(state, marketId, 3, 5, DEFAULT_REWARD_PARAMS, 0.97);
 
+  // Pre-filter now only removes structurally impossible plans (inv >= maxInv=8).
+  // inv=7 < 8 so AGG_BUY/SKEW_BID are included; JuMP inventory_skew constrains them.
   const buyPressure = matrix.plans.filter(
     (p) => p.firstAction === "AGG_BUY" || p.firstAction === "SKEW_BID",
   );
-  assert.strictEqual(
-    buyPressure.length,
-    0,
-    "AGG_BUY/SKEW_BID absent: inv=7 >= maxInv-2=6 triggers feasibility filter",
-  );
+  assert.ok(buyPressure.length > 0, "AGG_BUY/SKEW_BID present so inventory_skew constraint can bind");
 });
 
 test("INV_STRESS: sell-side actions (AGG_SELL, SKEW_ASK) still present", () => {

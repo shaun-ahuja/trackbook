@@ -129,17 +129,16 @@ export type ScenarioMatrix = {
   context: ScenarioContext;
 };
 
-// Aggressive actions are infeasible when near the inventory limit or in a
-// shock regime with low confidence — excludes them before rollout runs.
+// Only exclude plans that are structurally impossible (would immediately
+// breach the hard inventory ceiling on the very first step). All regime-
+// conditional suppression is handled by the JuMP named constraints so that
+// those constraints appear as binding in the explanation — the pre-filter was
+// making shock_aggr_limit and inventory_skew vacuous.
 function isFeasible(action: RolloutAction, market: Market, params: RewardParams): boolean {
   const inv = market.inventory;
   const maxInv = params.maxInv;
-  const regime = market.regimeState.regime;
-  const conf = market.confidence;
-  if ((action === "AGG_BUY" || action === "SKEW_BID") && inv >= maxInv - 2) return false;
-  if ((action === "AGG_SELL" || action === "SKEW_ASK") && inv <= -(maxInv - 2)) return false;
-  if ((action === "AGG_BUY" || action === "AGG_SELL") && regime === "shock" && conf < 0.5)
-    return false;
+  if ((action === "AGG_BUY" || action === "SKEW_BID") && inv >= maxInv) return false;
+  if ((action === "AGG_SELL" || action === "SKEW_ASK") && inv <= -maxInv) return false;
   return true;
 }
 
@@ -155,18 +154,28 @@ function deriveRolloutSeed(baseRng: number, planIndex: number, trajectoryIndex: 
 }
 
 // Patches state so that on the next tick, decide() in marketMaker.ts locks to
-// `marketAction` via the MIN_HOLD_TICKS hysteresis. Setting lastDecisionTick =
-// state.tick means ticksSinceDecision = 1 inside the tick (< 25), activating
-// the lock and preserving the forced action unless a very large edge / fresh
-// shock overrides it.
+// `marketAction` via the MIN_HOLD_TICKS hysteresis. Also resets lastEdgeAtFlip
+// and lastConfAtFlip to current values so evidenceDelta=0 on the next tick —
+// without this, a stale baseline from before scenario application (e.g. edge
+// from forecastProb=0.55 vs new forecastProb=0.39) exceeds
+// EVIDENCE_DELTA_THRESHOLD=4 and breaks the lock on every step.
 function forceMarketAction(state: SimState, marketId: string, marketAction: MarketAction): SimState {
   const m = state.markets[marketId];
   if (!m) return state;
+  const fair = m.forecastProb * 100;
+  const mid = (m.marketBid + m.marketAsk) / 2;
+  const edge = fair - mid;
   return {
     ...state,
     markets: {
       ...state.markets,
-      [marketId]: { ...m, lastAction: marketAction, lastDecisionTick: state.tick },
+      [marketId]: {
+        ...m,
+        lastAction: marketAction,
+        lastDecisionTick: state.tick,
+        lastEdgeAtFlip: edge,
+        lastConfAtFlip: m.confidence,
+      },
     },
   };
 }
@@ -262,6 +271,12 @@ export function buildScenarioMatrix(
     marketOrder: [marketId],
     markets: { [marketId]: market },
     fills: [],
+    // Suppress synthetic event generation during rollouts. Events (shocks) are
+    // by definition macro surprises — they should not be randomly injected into
+    // every trajectory, which would create forecastProb spikes via shockContrib
+    // that overwhelm the P&L signal with mark-to-fair noise.
+    dataSource: "mta" as const,
+    ticksSinceMtaEvent: 0,
   };
 
   const plans: PlanDescriptor[] = [];

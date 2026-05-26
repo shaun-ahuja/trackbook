@@ -23,7 +23,8 @@ function makeMarketStub(overrides: Partial<Market> = {}): Market {
 test("stepReward: pure PnL delta with no fills", () => {
   (globalThis as { window?: Window }).window = {} as Window;
   const prev = makeMarketStub({ realizedPnl: 0, unrealizedPnl: 0, inventory: 0, lastAction: "HOLD" });
-  const next = makeMarketStub({ realizedPnl: 5, unrealizedPnl: 2, inventory: 0, lastAction: "HOLD" });
+  // With inventory=0 markToFairPnl(m) = m.realizedPnl, so set realizedPnl=7 directly.
+  const next = makeMarketStub({ realizedPnl: 7, unrealizedPnl: 0, inventory: 0, lastAction: "HOLD" });
   const r = stepReward(prev, next, [], DEFAULT_REWARD_PARAMS, "HOLD");
   // pnlΔ = 7, invRisk = 0, no adverse, no churn
   assert.ok(Math.abs(r - 7) < 1e-9, `expected ≈7, got ${r}`);
@@ -32,10 +33,12 @@ test("stepReward: pure PnL delta with no fills", () => {
 test("stepReward: inventory risk penalises large positions", () => {
   (globalThis as { window?: Window }).window = {} as Window;
   const prev = makeMarketStub({ realizedPnl: 0, unrealizedPnl: 0, inventory: 0, lastAction: "HOLD" });
-  const next = makeMarketStub({ realizedPnl: 0, unrealizedPnl: 0, inventory: 8, lastAction: "HOLD" });
+  // Set avgCost = fair (forecastProb * 100) so markToFairPnl delta is zero; isolates invRisk term.
+  const fair = prev.forecastProb * 100;
+  const next = makeMarketStub({ realizedPnl: 0, unrealizedPnl: 0, inventory: 8, avgCost: fair, lastAction: "HOLD" });
   const r = stepReward(prev, next, [], DEFAULT_REWARD_PARAMS, "HOLD");
-  // pnlΔ=0, invRisk = 1.5 * (8/8)^2 = 1.5
-  assert.ok(Math.abs(r - (-1.5)) < 1e-9, `expected -1.5, got ${r}`);
+  // pnlΔ=0, invRisk = λInv * (8/8)^2 = λInv
+  assert.ok(Math.abs(r - (-DEFAULT_REWARD_PARAMS.λInv)) < 1e-9, `expected -${DEFAULT_REWARD_PARAMS.λInv}, got ${r}`);
 });
 
 test("stepReward: churn cost when action changes", () => {
@@ -179,24 +182,26 @@ test("buildScenarioMatrix: context fields are finite and in range", () => {
   assert.ok(ctx.adverseSelectionScore >= 0 && ctx.adverseSelectionScore <= 1, "adverseScore in [0,1]");
 });
 
-test("buildScenarioMatrix: AGG_BUY/SELL filtered when near inventory limit", () => {
+test("buildScenarioMatrix: AGG_BUY/SELL filtered at hard inventory limit", () => {
   (globalThis as { window?: Window }).window = {} as Window;
   const initial = makeInitialState(FIXED_NOW);
   const marketId = initial.marketOrder[0]!;
-  // Force inventory near limit
+  // At the hard ceiling, AGG_BUY/SKEW_BID are structurally infeasible and pre-filtered.
+  // Near-limit suppression (inv < maxInv) is left to JuMP constraints so they appear
+  // as binding in the explanation rather than being silently pre-filtered.
   const state = {
     ...initial,
     markets: {
       ...initial.markets,
       [marketId]: {
         ...initial.markets[marketId]!,
-        inventory: DEFAULT_REWARD_PARAMS.maxInv - 1, // 7 of 8 limit
+        inventory: DEFAULT_REWARD_PARAMS.maxInv, // at hard ceiling
       },
     },
   };
   const matrix = buildScenarioMatrix(state, marketId, 1, 2);
   const aggBuyPlans = matrix.plans.filter((p) => p.firstAction === "AGG_BUY");
   const skewBidPlans = matrix.plans.filter((p) => p.firstAction === "SKEW_BID");
-  assert.strictEqual(aggBuyPlans.length, 0, "AGG_BUY filtered near long limit");
-  assert.strictEqual(skewBidPlans.length, 0, "SKEW_BID filtered near long limit");
+  assert.strictEqual(aggBuyPlans.length, 0, "AGG_BUY filtered at hard long limit");
+  assert.strictEqual(skewBidPlans.length, 0, "SKEW_BID filtered at hard long limit");
 });

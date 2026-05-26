@@ -6,7 +6,7 @@ export async function fetchTripFeed(url: string): Promise<Uint8Array> {
   const res = await fetch(url, {
     cache: "no-store",
     headers: {
-      "user-agent": "Mozilla/5.0 (compatible; TrackBook/0.1)",
+      "user-agent": "Mozilla/5.0 (compatible; TransitAlpha/0.1)",
       accept: "application/x-protobuf,application/octet-stream",
     },
   });

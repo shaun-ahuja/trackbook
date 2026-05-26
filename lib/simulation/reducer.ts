@@ -134,6 +134,33 @@ function applyScenario(state: SimState, patch: import("../types").ScenarioPatch)
 
   const mid = (m.marketBid + m.marketAsk) / 2;
 
+  // Compute new edge after applying forecastProb patch (used to reset evidenceDelta).
+  const newForecastProb = patch.forecastProb ?? m.forecastProb;
+  const newConf = patch.confidence ?? m.confidence;
+  const newFair = newForecastProb * 100;
+  const newEdge = newFair - mid;
+
+  // Build a single dynamics patch combining all scenario fields. The forecastProb
+  // alignment MUST be merged with the vol update in one spread — two separate
+  // `dynamics: { ...m.dynamics, ... }` spreads would have the later one win,
+  // silently dropping the earlier changes.
+  const dynamicsPatch: Partial<typeof m.dynamics> = {};
+  if (patch.forecastProb !== undefined) {
+    // Align the dynamics baseline to the patched forecast so the simulator
+    // doesn't mean-revert forecastProb back to the old market-equilibrium
+    // during rollouts. Without this, adaptiveBase stays at ~market-mid while
+    // forecastProb is patched higher, creating a systematic pull in every
+    // rollout step that overwhelms the P&L signal.
+    dynamicsPatch.adaptiveBaseProbability = patch.forecastProb;
+    dynamicsPatch.longRunBaseProbability = patch.forecastProb;
+    dynamicsPatch.lastLatentTrueProbability = patch.forecastProb;
+    dynamicsPatch.prevLatentTrueProbability = patch.forecastProb;
+  }
+  if (patch.vol !== undefined) {
+    dynamicsPatch.volatilityEstimate = patch.vol;
+  }
+  const hasDynamicsPatch = patch.forecastProb !== undefined || patch.vol !== undefined;
+
   const patchedMarket: Market = {
     ...m,
     ...(patch.inventory !== undefined
@@ -163,12 +190,15 @@ function applyScenario(state: SimState, patch: import("../types").ScenarioPatch)
           fairValueCents: Math.round(patch.forecastProb * 1000) / 10,
         }
       : {}),
-    ...(patch.vol !== undefined
-      ? {
-          vol: patch.vol,
-          dynamics: { ...m.dynamics, volatilityEstimate: patch.vol },
-        }
-      : {}),
+    ...(patch.vol !== undefined ? { vol: patch.vol } : {}),
+    ...(hasDynamicsPatch ? { dynamics: { ...m.dynamics, ...dynamicsPatch } } : {}),
+    // Reset hysteresis evidence baseline so the patched scenario starts with a
+    // clean lock. Without this, a stale lastEdgeAtFlip from before the patch
+    // (e.g. edge=20¢) causes evidenceDelta >> EVIDENCE_DELTA_THRESHOLD and the
+    // market maker immediately overrides forced rollout actions.
+    lastEdgeAtFlip: newEdge,
+    lastConfAtFlip: newConf,
+    lastDecisionTick: state.tick,
   };
 
   return {

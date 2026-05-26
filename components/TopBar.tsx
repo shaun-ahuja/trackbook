@@ -57,7 +57,7 @@ export default function TopBar({
       <div className="flex items-center gap-3">
         <div className="flex items-baseline gap-2">
           <span className="text-[12px] font-bold tracking-[0.32em] text-[var(--color-accent)]">
-            TRACKBOOK
+            TRANSITALPHA
           </span>
           <span className="text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)]">
             nyc transit · mm desk

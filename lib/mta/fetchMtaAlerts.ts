@@ -12,7 +12,7 @@ export async function fetchMtaAlerts(): Promise<unknown> {
     headers: {
       accept: "application/json",
       // Some upstream CDNs reject empty UAs; pretend to be a browser.
-      "user-agent": "Mozilla/5.0 (compatible; TrackBook/0.1)",
+      "user-agent": "Mozilla/5.0 (compatible; TransitAlpha/0.1)",
     },
   });
   if (!res.ok) {

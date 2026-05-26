@@ -58,7 +58,7 @@ function build_explanation(
 
     # ── Layer 3: one-liner policy rationale ──────────────────────────────────
     push!(lines, "")
-    push!(lines, policy_rationale(plan.policyName, ctx, s, active_binding))
+    push!(lines, policy_rationale(plan, ctx, s, active_binding))
 
     # ── Top-3 mixing distribution ─────────────────────────────────────────────
     top_n = min(3, length(w))
@@ -77,11 +77,12 @@ function build_explanation(
 end
 
 function policy_rationale(
-    policy_name::String,
+    plan::PlanDescriptor,
     ctx::ScenarioContext,
     s::TrajectoryStats,
     binding::Vector{BindingConstraint},
 )::String
+    policy_name = plan.policyName
     inv = ctx.currentInventory
     max_inv = ctx.maxInventory
     conf = ctx.forecastConfidence
@@ -91,6 +92,18 @@ function policy_rationale(
     has_shock = any(b -> b.name == "shock_aggr_limit", binding)
     has_cvar  = any(b -> b.name == "cvar_risk_limit",  binding)
     has_inv   = any(b -> startswith(b.name, "inventory_skew") || b.name in ("inv_long_limit", "inv_short_limit"), binding)
+
+    # Sell-side first action under high inventory: explicitly name the inventory motive.
+    sell_actions = Set(["AGG_SELL", "SKEW_ASK", "HIT", "PARTIAL_FLATTEN"])
+    high_long  = inv >= 0.75 * max_inv
+    high_short = inv <= -0.75 * max_inv
+    if (plan.firstAction in sell_actions && high_long) || (plan.firstAction in Set(["AGG_BUY", "SKEW_BID", "LIFT"]) && high_short)
+        direction = high_long ? "long" : "short"
+        return @sprintf(
+            "Inventory reduction: position %.0f/%.0f %s. %s aggressively trims exposure (invRisk=%.2f/step); continuation policy maintains bias.",
+            abs(inv), max_inv, direction, plan.firstAction, 3.0 * (inv / max_inv)^2,
+        )
+    end
 
     if policy_name == "passive_maker"
         if has_cvar
