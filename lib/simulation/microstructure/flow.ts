@@ -8,6 +8,7 @@ import type {
   TraderArchetype,
 } from "../../types";
 import { applyIntents, topOfBook } from "../bookReducer";
+import type { WasmMarketAdapter } from "../wasmAdapter";
 import { safeBookState } from "../orderBookState";
 import {
   divergenceFlowReason,
@@ -61,14 +62,9 @@ export function flowTick(args: {
   currentTick: number;
   now: number;
   regime: MarketRegime;
-  // |impact| if a live event hit this market this tick, else 0. Used by
-  // the flowReason dwell gate to allow an immediate refresh on a major
-  // tape event.
   eventImpactMag: number;
-  // Optional divergence snapshot. When mild/strong, flowReason is
-  // overridden with the magnet annotation so the panel explains the
-  // extra pressure showing up in the tape.
   divCtx?: DivergenceContext;
+  adapter?: WasmMarketAdapter;
 }): FlowOutput {
   const { market, currentTick, now, regime, eventImpactMag, divCtx } = args;
   let seed = args.seed;
@@ -141,6 +137,7 @@ export function flowTick(args: {
     marketId: market.id,
     fairCents: fair,
     now,
+    adapter: args.adapter,
   });
 
   // 3) Derived signals.

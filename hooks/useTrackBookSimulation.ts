@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { reduceWithShadow } from "@/lib/simulation/reducer";
 import { makeInitialState } from "@/lib/simulation/markets";
 import { ShadowSimulationRuntime } from "@/lib/simulation/shadowRuntime";
+import { WasmMarketAdapter } from "@/lib/simulation/wasmAdapter";
+import { MatchingEngineKernel } from "@/lib/wasm/orderBookKernel";
 import type { DataSourceMode, Market, TransitEvent } from "@/lib/types";
 import { useMtaAlerts } from "@/hooks/useMtaAlerts";
 import { useMtaTrips } from "@/hooks/useMtaTrips";
@@ -29,6 +31,8 @@ export function useTrackBookSimulation(): UseTrackBookSimulation {
   const [state, setState] = useState(() => makeInitialState(FIXED_EPOCH));
   const stateRef = useRef(state);
   const runtimeRef = useRef<ShadowSimulationRuntime | null>(null);
+  const adaptersRef = useRef<Map<string, WasmMarketAdapter> | null>(null);
+  const kernelRef = useRef<MatchingEngineKernel | null>(null);
 
   useEffect(() => {
     stateRef.current = state;
@@ -52,19 +56,62 @@ export function useTrackBookSimulation(): UseTrackBookSimulation {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void MatchingEngineKernel.create()
+      .then((kernel) => {
+        if (cancelled) return;
+        kernelRef.current = kernel;
+        const adapterMap = new Map<string, WasmMarketAdapter>();
+        const initial = stateRef.current;
+        for (const id of initial.marketOrder) {
+          const market = initial.markets[id];
+          if (!market) continue;
+          const handle = kernel.createEngine();
+          const adapter = new WasmMarketAdapter(kernel, handle);
+          adapter.seed(market.bookState);
+          adapterMap.set(id, adapter);
+        }
+        adaptersRef.current = adapterMap;
+      })
+      .catch((error) => {
+        console.error("[wasm-adapter] failed to initialize", error);
+      });
+    return () => {
+      cancelled = true;
+      adaptersRef.current = null;
+    };
+  }, []);
+
   const dispatch = useCallback((action: Parameters<typeof reduceWithShadow>[1]) => {
-    const { nextState, shadowTrace } = reduceWithShadow(stateRef.current, action);
+    const adapters = adaptersRef.current ?? undefined;
+    const { nextState, shadowTrace } = reduceWithShadow(stateRef.current, action, adapters);
     stateRef.current = nextState;
     setState(nextState);
 
-    const runtime = runtimeRef.current;
-    if (!runtime) return;
     if (action.type === "RESEED") {
-      runtime.initializeFromState(nextState);
+      const kernel = kernelRef.current;
+      if (kernel && adaptersRef.current) {
+        for (const adapter of adaptersRef.current.values()) {
+          adapter.destroy();
+        }
+        const newAdapters = new Map<string, WasmMarketAdapter>();
+        for (const id of nextState.marketOrder) {
+          const market = nextState.markets[id];
+          if (!market) continue;
+          const handle = kernel.createEngine();
+          const adapter = new WasmMarketAdapter(kernel, handle);
+          adapter.seed(market.bookState);
+          newAdapters.set(id, adapter);
+        }
+        adaptersRef.current = newAdapters;
+      }
+      runtimeRef.current?.initializeFromState(nextState);
       return;
     }
+
     if (shadowTrace) {
-      runtime.replayTick(shadowTrace);
+      runtimeRef.current?.replayTick(shadowTrace);
     }
   }, []);
 

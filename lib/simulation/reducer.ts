@@ -1,4 +1,5 @@
 import type { Fill, Market, SimAction, SimState, TransitEvent } from "../types";
+import type { OrderBook } from "../types";
 import { makeInitialState } from "./markets";
 import { tickEvents } from "./events";
 import { driftForecast } from "./forecast";
@@ -22,6 +23,8 @@ import {
   syncDeskQuote,
 } from "./bookReducer";
 import { projectVisibleBook, safeBookState } from "./orderBookState";
+import { WasmMarketAdapter } from "./wasmAdapter";
+import { ticksToCents } from "../wasm/orderBookKernelTypes";
 import { divergenceContext } from "./orderFlow";
 import {
   bookStateTraceSignature,
@@ -54,13 +57,14 @@ export function reducer(state: SimState, action: SimAction): SimState {
 export function reduceWithShadow(
   state: SimState,
   action: SimAction,
+  adapters?: Map<string, WasmMarketAdapter>,
 ): {
   nextState: SimState;
   shadowTrace: ShadowTickTrace | null;
 } {
   switch (action.type) {
     case "TICK":
-      return tick(state, action.now);
+      return tick(state, action.now, adapters);
     case "SELECT":
       if (!state.markets[action.marketId]) return { nextState: state, shadowTrace: null };
       return { nextState: { ...state, selectedMarketId: action.marketId }, shadowTrace: null };
@@ -190,6 +194,7 @@ function shouldSpawnSynthetic(state: SimState): boolean {
 function tick(
   state: SimState,
   now: number,
+  adapters?: Map<string, WasmMarketAdapter>,
 ): { nextState: SimState; shadowTrace: ShadowTickTrace | null } {
   if (state.paused) return { nextState: state, shadowTrace: null };
   let seed = state.rngState;
@@ -221,6 +226,15 @@ function tick(
 
   for (const id of state.marketOrder) {
     let m = newMarkets[id];
+    const adapter = adapters?.get(id);
+    if (adapter) {
+      adapter.beginTick({
+        now,
+        currentTick: nextTick,
+        marketId: id,
+        markFair: m.fairValueCents,
+      });
+    }
     const shadowSteps: ShadowTraceStep[] = [];
     const phaseVisits: ShadowPhaseVisit[] = [];
 
@@ -255,7 +269,7 @@ function tick(
 
     // 3) Age + soft-cancel non-desk resting orders.
     const bookBeforeAge = m.bookState;
-    const aged = ageAndCancel(safeBookState(m.bookState), regime, nextTick, seed, divCtx);
+    const aged = ageAndCancel(safeBookState(m.bookState), regime, nextTick, seed, divCtx, adapter);
     seed = aged.seed;
     m = { ...m, bookState: aged.book };
     pushShadowStep(
@@ -273,7 +287,7 @@ function tick(
 
     // 4) Sync desk's resting quote to last tick's decision.
     const bookBeforeSync = m.bookState;
-    const synced = syncDeskQuote(m.bookState, m.ourBid, m.ourAsk, nextTick, regime);
+    const synced = syncDeskQuote(m.bookState, m.ourBid, m.ourAsk, nextTick, regime, adapter);
     m = { ...m, bookState: synced.book };
     pushShadowStep(
       shadowSteps,
@@ -307,6 +321,7 @@ function tick(
       regime,
       eventImpactMag,
       divCtx,
+      adapter,
     });
     const bookBeforeFlow = m.bookState;
     m = flow.market;
@@ -334,6 +349,7 @@ function tick(
       marketId: m.id,
       fairCents: m.fairValueCents,
       now,
+      adapter,
     });
     if (cross.flowEvent) {
       m = {
@@ -383,6 +399,7 @@ function tick(
         fairCents: m.fairValueCents,
         now,
         seed,
+        adapter,
       });
       seed = mag.seed;
       if (mag.fired) {
@@ -430,6 +447,7 @@ function tick(
           marketId: m.id,
           fairCents: m.fairValueCents,
           now,
+          adapter,
         });
         m = { ...m, bookState: sweep.book };
         tickFills.push(...sweep.fills);
@@ -455,13 +473,29 @@ function tick(
     }
 
     // 10) Apply all desk fills generated this tick.
-    let hadFill = false;
     for (const fill of tickFills) {
-      m = applyFill(m, fill);
-      hadFill = true;
       newFills.unshift(fill);
     }
-    if (hadFill) m = { ...m, lastFillTick: nextTick };
+    if (adapter) {
+      // WASM-authoritative accounting: read directly from WASM snapshot.
+      const snapshot = adapter.getSnapshot();
+      const avgCost = ticksToCents(snapshot.avgCostTicks);
+      m = {
+        ...m,
+        inventory: snapshot.positionQty,
+        avgCost,
+        realizedPnl: ticksToCents(snapshot.realizedPnlTicks),
+        lastFillTick: tickFills.length > 0 ? nextTick : m.lastFillTick,
+      };
+    } else {
+      // TS fallback: apply fills manually.
+      let hadFill = false;
+      for (const fill of tickFills) {
+        m = applyFill(m, fill);
+        hadFill = true;
+      }
+      if (hadFill) m = { ...m, lastFillTick: nextTick };
+    }
     pushShadowStep(
       shadowSteps,
       phaseVisits,
@@ -483,7 +517,7 @@ function tick(
 
     // 12) Replenish if the visible spread blew out.
     const bookBeforeReplenish = m.bookState;
-    const repl = replenishIfThin(m.bookState, m.fairValueCents, regime, nextTick, seed, divCtx);
+    const repl = replenishIfThin(m.bookState, m.fairValueCents, regime, nextTick, seed, divCtx, adapter);
     seed = repl.seed;
     m = { ...m, bookState: repl.book };
     pushShadowStep(
@@ -507,7 +541,24 @@ function tick(
     );
 
     // 13) Project visible book for the UI.
-    m = { ...m, book: projectVisibleBook(m.bookState) };
+    if (adapter) {
+      const snapshot = adapter.getSnapshot();
+      const book: OrderBook = {
+        bids: snapshot.bidLevels.map((l) => ({
+          price: ticksToCents(l.priceTicks),
+          size: l.qty,
+          isOurs: l.hasDesk || undefined,
+        })),
+        asks: snapshot.askLevels.map((l) => ({
+          price: ticksToCents(l.priceTicks),
+          size: l.qty,
+          isOurs: l.hasDesk || undefined,
+        })),
+      };
+      m = { ...m, book };
+    } else {
+      m = { ...m, book: projectVisibleBook(m.bookState) };
+    }
 
     newMarkets[id] = m;
     shadowMarkets.push({

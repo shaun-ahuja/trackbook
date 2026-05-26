@@ -22,6 +22,7 @@ import {
   snapToTick,
   TICK_CENTS,
 } from "./orderBookState";
+import type { WasmMarketAdapter } from "./wasmAdapter";
 import {
   type DivergenceContext,
   type RoutedIntent,
@@ -70,6 +71,7 @@ export function ageAndCancel(
   currentTick: number,
   seed: number,
   divCtx?: DivergenceContext,
+  adapter?: WasmMarketAdapter,
 ): AgeOutput {
   // Pass 1 — hard expiry.
   const expiredIds = new Set<number>();
@@ -81,13 +83,13 @@ export function ageAndCancel(
   };
   collect(book.bids);
   collect(book.asks);
-  let next = cancelManyByIds(book, expiredIds);
 
-  // Pass 2 — soft cancel draws on remaining non-desk orders. Capped at
-  // SOFT_CANCEL_CAP_FRAC of resting orders to prevent a stampede.
+  // Pass 2 — soft cancel draws on non-desk survivors (excluding hard-expired).
   const candidates: RestingOrder[] = [];
-  for (const o of next.bids) if (o.owner !== "desk") candidates.push(o);
-  for (const o of next.asks) if (o.owner !== "desk") candidates.push(o);
+  for (const o of [...book.bids, ...book.asks]) {
+    if (o.owner === "desk" || expiredIds.has(o.id)) continue;
+    candidates.push(o);
+  }
   const cap = Math.max(1, Math.floor(candidates.length * SOFT_CANCEL_CAP_FRAC));
 
   const softIds = new Set<number>();
@@ -102,8 +104,22 @@ export function ageAndCancel(
     s = r.seed;
     if (r.v < rate) softIds.add(o.id);
   }
-  next = cancelManyByIds(next, softIds);
 
+  if (adapter) {
+    adapter.cancelManyByIds(new Set([...expiredIds, ...softIds]));
+    return {
+      book: adapter.snapshotToBookView(),
+      seed: s,
+      expiredCount: expiredIds.size,
+      softCancelCount: softIds.size,
+      expiredOrderIds: [...expiredIds],
+      softCancelOrderIds: [...softIds],
+    };
+  }
+
+  // TS fallback path
+  let next = cancelManyByIds(book, expiredIds);
+  next = cancelManyByIds(next, softIds);
   return {
     book: next,
     seed: s,
@@ -137,14 +153,63 @@ export function syncDeskQuote(
   ourAsk: number,
   currentTick: number,
   regime: MarketRegime,
+  adapter?: WasmMarketAdapter,
 ): DeskSyncOutput {
   const deskIds = new Set<number>();
   for (const o of book.bids) if (o.owner === "desk") deskIds.add(o.id);
   for (const o of book.asks) if (o.owner === "desk") deskIds.add(o.id);
-  const cleared = cancelManyByIds(book, deskIds);
   const postedDeskOrders: RestingOrder[] = [];
-
   const deskSize = regime === "shock" ? DESK_SIZE_SHOCK : DESK_SIZE_NORMAL;
+
+  if (adapter) {
+    adapter.cancelManyByIds(deskIds);
+    const viewAfterCancel = adapter.snapshotToBookView();
+
+    const oppAsk = bestAskPrice(viewAfterCancel, ourAsk + 1);
+    const safeBid = clampPrice(Math.min(ourBid, oppAsk - TICK_CENTS));
+    if (safeBid >= 1) {
+      const res = adapter.submitLimit("BID", safeBid, deskSize, "desk", currentTick, 999);
+      if (res.restedOrderId !== undefined) {
+        postedDeskOrders.push({
+          id: res.restedOrderId,
+          side: "BID",
+          priceCents: safeBid,
+          size: deskSize,
+          owner: "desk",
+          postedTick: currentTick,
+          ttlTicks: 999,
+        });
+      }
+    }
+
+    const viewAfterBid = adapter.snapshotToBookView();
+    const oppBid = bestBidPrice(viewAfterBid, ourBid - 1);
+    const safeAsk = clampPrice(Math.max(ourAsk, oppBid + TICK_CENTS));
+    if (safeAsk <= 99) {
+      const res = adapter.submitLimit("ASK", safeAsk, deskSize, "desk", currentTick, 999);
+      if (res.restedOrderId !== undefined) {
+        postedDeskOrders.push({
+          id: res.restedOrderId,
+          side: "ASK",
+          priceCents: safeAsk,
+          size: deskSize,
+          owner: "desk",
+          postedTick: currentTick,
+          ttlTicks: 999,
+        });
+      }
+    }
+
+    return {
+      book: adapter.snapshotToBookView(),
+      changed: true,
+      canceledDeskOrderIds: [...deskIds],
+      postedDeskOrders,
+    };
+  }
+
+  // TS fallback path
+  const cleared = cancelManyByIds(book, deskIds);
   let next = cleared;
 
   const oppAsk = bestAskPrice(next, ourAsk + 1);
@@ -186,6 +251,7 @@ export type ApplyIntentsArgs = {
   marketId: string;
   fairCents: number;
   now: number;
+  adapter?: WasmMarketAdapter;
 };
 
 export type ApplyIntentsOutput = {
@@ -222,7 +288,7 @@ export type ApplyIntentsOutput = {
 // external takers — they generate desk passive fills (handled by the
 // matching engine), and external-vs-external trades don't emit Fills.
 export function applyIntents(args: ApplyIntentsArgs): ApplyIntentsOutput {
-  const { currentTick, marketId, fairCents, now } = args;
+  const { currentTick, marketId, fairCents, now, adapter } = args;
   let book = args.book;
   const fills: Fill[] = [];
   let marketCount = 0;
@@ -238,23 +304,14 @@ export function applyIntents(args: ApplyIntentsArgs): ApplyIntentsOutput {
       currentTick,
       marketId,
       markFair: fairCents,
-      // Caller is always an external trader here — any desk fill produced
-      // is by virtue of desk being a resting maker, so the matching engine
-      // labels it "passive". The kind below is therefore only meaningful
-      // if a desk-vs-desk path is ever reached, which can't happen
-      // because external takerOwner != "desk".
       deskFillKind: "passive" as FillKind,
       rngTag: currentTick * 100 + i,
     };
 
     if (r.intent.kind === "market") {
-      const res = executeMarket(
-        book,
-        r.intent.side,
-        r.intent.qty,
-        r.owner,
-        ctx,
-      );
+      const res = adapter
+        ? adapter.executeMarket(r.intent.side, r.intent.qty, r.owner, "passive", currentTick)
+        : executeMarket(book, r.intent.side, r.intent.qty, r.owner, ctx);
       book = res.book;
       fills.push(...res.fills);
       marketCount++;
@@ -274,25 +331,20 @@ export function applyIntents(args: ApplyIntentsArgs): ApplyIntentsOutput {
         priceCents: snapToTick(r.intent.priceCents),
       });
     } else {
-      const res = insertLimit(
-        book,
-        r.intent.side === "BUY" ? "BID" : "ASK",
-        clampPrice(r.intent.priceCents),
-        r.intent.qty,
-        r.owner,
-        currentTick,
-        r.ttlTicks,
-        ctx,
-      );
+      const limitSide: BookSide = r.intent.side === "BUY" ? "BID" : "ASK";
+      const limitPrice = clampPrice(r.intent.priceCents);
+      const res = adapter
+        ? adapter.submitLimit(limitSide, limitPrice, r.intent.qty, r.owner, currentTick, r.ttlTicks, "passive")
+        : insertLimit(book, limitSide, limitPrice, r.intent.qty, r.owner, currentTick, r.ttlTicks, ctx);
       book = res.book;
       fills.push(...res.fills);
       limitCount++;
       shadowOps.push({
         kind: "submit_limit",
-        side: r.intent.side === "BUY" ? "BID" : "ASK",
+        side: limitSide,
         owner: r.owner,
         qty: r.intent.qty,
-        priceCents: clampPrice(r.intent.priceCents),
+        priceCents: limitPrice,
         ttlTicks: r.ttlTicks,
         fillKind: "passive",
         logicalTime: currentTick,
@@ -336,6 +388,7 @@ export function deskAggressiveCross(args: {
   marketId: string;
   fairCents: number;
   now: number;
+  adapter?: WasmMarketAdapter;
 }): DeskCrossOutput {
   const { posture, inventory, ticksSinceFill } = args;
 
@@ -361,14 +414,16 @@ export function deskAggressiveCross(args: {
     return { book: args.book, fills: [], flowEvent: null, shadowCommand: null };
   }
 
-  const res = executeMarket(args.book, side, qty, "desk", {
-    now: args.now,
-    currentTick: args.currentTick,
-    marketId: args.marketId,
-    markFair: args.fairCents,
-    deskFillKind: fillKind,
-    rngTag: args.currentTick * 100 + 99,
-  });
+  const res = args.adapter
+    ? args.adapter.executeMarket(side, qty, "desk", fillKind, args.currentTick)
+    : executeMarket(args.book, side, qty, "desk", {
+        now: args.now,
+        currentTick: args.currentTick,
+        marketId: args.marketId,
+        markFair: args.fairCents,
+        deskFillKind: fillKind,
+        rngTag: args.currentTick * 100 + 99,
+      });
 
   const refPrice = res.lastTradePriceCents ?? (side === "BUY"
     ? bestAskPrice(args.book, args.fairCents)
@@ -421,6 +476,7 @@ export function divergenceMagnet(args: {
   fairCents: number;
   now: number;
   seed: number;
+  adapter?: WasmMarketAdapter;
 }): MagnetOutput {
   if (args.mode === "none" || args.divergenceCents === 0) {
     return {
@@ -444,14 +500,16 @@ export function divergenceMagnet(args: {
   // so the magnet doesn't dominate any single tick.
   const steadyCount = args.mode === "strong" ? 2 : 1;
   for (let i = 0; i < steadyCount; i++) {
-    const res = executeMarket(book, side, 1, "informed", {
-      now: args.now,
-      currentTick: args.currentTick,
-      marketId: args.marketId,
-      markFair: args.fairCents,
-      deskFillKind: "passive",
-      rngTag: args.currentTick * 100 + 70 + i,
-    });
+    const res = args.adapter
+      ? args.adapter.executeMarket(side, 1, "informed", "passive", args.currentTick)
+      : executeMarket(book, side, 1, "informed", {
+          now: args.now,
+          currentTick: args.currentTick,
+          marketId: args.marketId,
+          markFair: args.fairCents,
+          deskFillKind: "passive",
+          rngTag: args.currentTick * 100 + 70 + i,
+        });
     book = res.book;
     fills.push(...res.fills);
     shadowCommands.push({
@@ -477,14 +535,16 @@ export function divergenceMagnet(args: {
     s = r.seed;
     if (r.v < 0.4) {
       const qty = Math.max(1, Math.min(3, Math.round(Math.abs(args.divergenceCents) / 10)));
-      const sweep = executeMarket(book, side, qty, "informed", {
-        now: args.now,
-        currentTick: args.currentTick,
-        marketId: args.marketId,
-        markFair: args.fairCents,
-        deskFillKind: "passive",
-        rngTag: args.currentTick * 100 + 77,
-      });
+      const sweep = args.adapter
+        ? args.adapter.executeMarket(side, qty, "informed", "passive", args.currentTick)
+        : executeMarket(book, side, qty, "informed", {
+            now: args.now,
+            currentTick: args.currentTick,
+            marketId: args.marketId,
+            markFair: args.fairCents,
+            deskFillKind: "passive",
+            rngTag: args.currentTick * 100 + 77,
+          });
       book = sweep.book;
       fills.push(...sweep.fills);
       shadowCommands.push({
@@ -518,6 +578,7 @@ export type ShockSweepArgs = {
   marketId: string;
   fairCents: number;
   now: number;
+  adapter?: WasmMarketAdapter;
 };
 
 export function shockSweep(args: ShockSweepArgs): {
@@ -538,14 +599,16 @@ export function shockSweep(args: ShockSweepArgs): {
   // side (so the desk's resting ask gets hit, desk sells).
   // Negative impact → mirror.
   const takerSide: "BUY" | "SELL" = args.impactSign > 0 ? "BUY" : "SELL";
-  const res = executeMarket(args.book, takerSide, args.qty, "panic", {
-    now: args.now,
-    currentTick: args.currentTick,
-    marketId: args.marketId,
-    markFair: args.fairCents,
-    deskFillKind: "shock",
-    rngTag: args.currentTick * 100 + 88,
-  });
+  const res = args.adapter
+    ? args.adapter.executeMarket(takerSide, args.qty, "panic", "shock", args.currentTick)
+    : executeMarket(args.book, takerSide, args.qty, "panic", {
+        now: args.now,
+        currentTick: args.currentTick,
+        marketId: args.marketId,
+        markFair: args.fairCents,
+        deskFillKind: "shock",
+        rngTag: args.currentTick * 100 + 88,
+      });
   return {
     book: res.book,
     fills: res.fills,
@@ -571,6 +634,7 @@ export function replenishIfThin(
   currentTick: number,
   seed: number,
   divCtx?: DivergenceContext,
+  adapter?: WasmMarketAdapter,
 ): {
   book: BookState;
   seed: number;
@@ -620,12 +684,30 @@ export function replenishIfThin(
         : clampPrice(Math.max(refAsk - TICK_CENTS, refBid + TICK_CENTS));
     }
     if (px < 1 || px > 99) return;
-    const made = makeOrder(next, sideTag, px, size, "lp", currentTick, ttl);
-    next = sideTag === "BID"
-      ? { ...next, nextOrderId: made.nextId, bids: insertIntoSide(next.bids, made.order) }
-      : { ...next, nextOrderId: made.nextId, asks: insertIntoSide(next.asks, made.order) };
-    injected++;
-    postedOrders.push(made.order);
+    if (adapter) {
+      const res = adapter.submitLimit(sideTag, px, size, "lp", currentTick, ttl);
+      next = res.book;
+      if (res.restedOrderId !== undefined) {
+        const order: RestingOrder = {
+          id: res.restedOrderId,
+          side: sideTag,
+          priceCents: px,
+          size,
+          owner: "lp",
+          postedTick: currentTick,
+          ttlTicks: ttl,
+        };
+        injected++;
+        postedOrders.push(order);
+      }
+    } else {
+      const made = makeOrder(next, sideTag, px, size, "lp", currentTick, ttl);
+      next = sideTag === "BID"
+        ? { ...next, nextOrderId: made.nextId, bids: insertIntoSide(next.bids, made.order) }
+        : { ...next, nextOrderId: made.nextId, asks: insertIntoSide(next.asks, made.order) };
+      injected++;
+      postedOrders.push(made.order);
+    }
   };
 
   if (thinBids || wideSpread) placeInside("BID");
@@ -645,12 +727,30 @@ export function replenishIfThin(
       const px = sideTag === "BID"
         ? clampPrice(refBid - TICK_CENTS * 2)
         : clampPrice(refAsk + TICK_CENTS * 2);
-      const made = makeOrder(next, sideTag, px, size, "patient", currentTick, ttl);
-      next = sideTag === "BID"
-        ? { ...next, nextOrderId: made.nextId, bids: insertIntoSide(next.bids, made.order) }
-        : { ...next, nextOrderId: made.nextId, asks: insertIntoSide(next.asks, made.order) };
-      injected++;
-      postedOrders.push(made.order);
+      if (adapter) {
+        const res = adapter.submitLimit(sideTag, px, size, "patient", currentTick, ttl);
+        next = res.book;
+        if (res.restedOrderId !== undefined) {
+          const order: RestingOrder = {
+            id: res.restedOrderId,
+            side: sideTag,
+            priceCents: px,
+            size,
+            owner: "patient",
+            postedTick: currentTick,
+            ttlTicks: ttl,
+          };
+          injected++;
+          postedOrders.push(order);
+        }
+      } else {
+        const made = makeOrder(next, sideTag, px, size, "patient", currentTick, ttl);
+        next = sideTag === "BID"
+          ? { ...next, nextOrderId: made.nextId, bids: insertIntoSide(next.bids, made.order) }
+          : { ...next, nextOrderId: made.nextId, asks: insertIntoSide(next.asks, made.order) };
+        injected++;
+        postedOrders.push(made.order);
+      }
     }
   }
 
