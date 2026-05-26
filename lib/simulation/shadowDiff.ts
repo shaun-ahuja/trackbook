@@ -66,22 +66,29 @@ function fillKindFromTag(kind: number): FillKind {
   }
 }
 
+// Tolerance for float comparison between TS (cents, batch-applied) and C++
+// (ticks, inline-applied). Both are IEEE 754 double but accumulate via
+// different call chains; sub-nanosecond deltas are not meaningful.
+const ACCOUNTING_EPSILON = 1e-9;
+
 function compareAccounting(
   snapshot: MatchingEngineStateSnapshot,
   expected: ShadowExpectedAccounting,
 ): Record<string, unknown> | null {
+  const avgCostActual = ticksToCents(snapshot.avgCostTicks);
+  const realizedActual = ticksToCents(snapshot.realizedPnlTicks);
   if (
     snapshot.positionQty === expected.inventory &&
-    ticksToCents(snapshot.avgCostTicks) === expected.avgCost &&
-    ticksToCents(snapshot.realizedPnlTicks) === expected.realizedPnl
+    Math.abs(avgCostActual - expected.avgCost) < ACCOUNTING_EPSILON &&
+    Math.abs(realizedActual - expected.realizedPnl) < ACCOUNTING_EPSILON
   ) {
     return null;
   }
   return {
     actual: {
       inventory: snapshot.positionQty,
-      avgCost: ticksToCents(snapshot.avgCostTicks),
-      realizedPnl: ticksToCents(snapshot.realizedPnlTicks),
+      avgCost: avgCostActual,
+      realizedPnl: realizedActual,
     },
     expected,
   };

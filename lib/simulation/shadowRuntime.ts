@@ -7,6 +7,7 @@ import {
   MatchingEngineSideTag,
   type MatchingEngineCommand,
   type MatchingEngineFillRecord,
+  type MatchingEngineStateSnapshot,
 } from "../wasm/orderBookKernelTypes.ts";
 import type { ShadowCommand, ShadowMarketTrace, ShadowTickTrace } from "./shadowTrace";
 import { compareShadowStep, type ShadowMismatch } from "./shadowDiff";
@@ -209,6 +210,7 @@ export class ShadowSimulationRuntime {
       }
     }
 
+    this.checkSeedParity(market, handle);
     this.markets.set(market.id, state);
     this.debugState.handlesByMarket[market.id] = handle;
     this.debugState.accountingComparableByMarket[market.id] = state.accountingComparable;
@@ -325,12 +327,38 @@ export class ShadowSimulationRuntime {
       for (const command of step.commands) {
         const native = this.toNativeCommand(command, marketState.tsToNativeOrderIds);
         if (!native) {
+          const tsOrderId = "tsOrderId" in command ? command.tsOrderId : undefined;
+          const inMap = tsOrderId !== undefined ? marketState.tsToNativeOrderIds.has(tsOrderId) : undefined;
           mismatches.push({
             marketId: trace.marketId,
             tick: trace.tick,
             stepLabel: step.label,
             type: "mapping",
-            detail: { command },
+            detail: {
+              reason:
+                command.kind === "cancel"
+                  ? (inMap ? "native_id_zero" : "order_not_in_map")
+                  : "unhandled_command_kind",
+              command,
+              tsIdInMap: inMap,
+              mapSize: marketState.tsToNativeOrderIds.size,
+              deskBidRef: lastResult.snapshot.deskBidRef,
+              deskAskRef: lastResult.snapshot.deskAskRef,
+              bestBidPriceTicks: lastResult.snapshot.bestBidPriceTicks,
+              bestAskPriceTicks: lastResult.snapshot.bestAskPriceTicks,
+            },
+          });
+          console.warn("[shadow:null-cmd]", {
+            tick: trace.tick,
+            label: step.label,
+            kind: command.kind,
+            tsOrderId,
+            inMap,
+            mapSize: marketState.tsToNativeOrderIds.size,
+            deskBidRef: lastResult.snapshot.deskBidRef,
+            deskAskRef: lastResult.snapshot.deskAskRef,
+            bestBid: lastResult.snapshot.bestBidPriceTicks,
+            bestAsk: lastResult.snapshot.bestAskPriceTicks,
           });
           continue;
         }
@@ -452,6 +480,75 @@ export class ShadowSimulationRuntime {
     this.debugState.recentMismatches.unshift(mismatch);
     this.debugState.recentMismatches = this.debugState.recentMismatches.slice(0, MAX_RECENT_MISMATCHES);
     console.warn("[shadow]", mismatch);
+  }
+
+  private checkSeedParity(market: Market, handle: number): void {
+    const snapshot = this.kernel.executeHandle(handle, []).snapshot;
+
+    const aggregate = (orders: Market["bookState"]["bids"]) => {
+      const byPrice = new Map<number, { qty: number; hasDesk: boolean }>();
+      for (const o of orders) {
+        const pt = Math.round(o.priceCents * 2);
+        const prev = byPrice.get(pt) ?? { qty: 0, hasDesk: false };
+        byPrice.set(pt, { qty: prev.qty + o.size, hasDesk: prev.hasDesk || o.owner === "desk" });
+      }
+      return byPrice;
+    };
+
+    const tsBids = aggregate(market.bookState.bids);
+    const tsAsks = aggregate(market.bookState.asks);
+
+    const check = (
+      wasmLevels: MatchingEngineStateSnapshot["bidLevels"],
+      tsMap: Map<number, { qty: number; hasDesk: boolean }>,
+      side: "BID" | "ASK",
+    ) => {
+      // WASM → TS: every WASM level must match a TS level
+      for (const level of wasmLevels) {
+        const ts = tsMap.get(level.priceTicks);
+        if (!ts || ts.qty !== level.qty || ts.hasDesk !== level.hasDesk) {
+          const reason =
+            `seed parity mismatch ${market.id} ${side} @${level.priceTicks}: ` +
+            `wasm qty=${level.qty} hasDesk=${level.hasDesk} ` +
+            `ts qty=${ts?.qty ?? "missing"} hasDesk=${ts?.hasDesk ?? "missing"}`;
+          this.recordMismatch({
+            marketId: market.id,
+            tick: 0,
+            stepLabel: "seed_parity",
+            type: "replay_fault",
+            detail: { reason, direction: "wasm→ts", side, priceTicks: level.priceTicks, wasm: level, ts: ts ?? null },
+          });
+          this.disable(reason);
+          return;
+        }
+      }
+
+      // TS → WASM: every TS top-4 level (by price) must appear in WASM snapshot
+      const wasmPrices = new Set(wasmLevels.map((l) => l.priceTicks));
+      const tsTop4 = [...tsMap.entries()]
+        .sort((a, b) => side === "BID" ? b[0] - a[0] : a[0] - b[0])
+        .slice(0, 4);
+      for (const [priceTicks, tsLevel] of tsTop4) {
+        if (!wasmPrices.has(priceTicks)) {
+          const reason =
+            `seed parity mismatch ${market.id} ${side} @${priceTicks}: ` +
+            `ts qty=${tsLevel.qty} hasDesk=${tsLevel.hasDesk} missing from wasm snapshot`;
+          this.recordMismatch({
+            marketId: market.id,
+            tick: 0,
+            stepLabel: "seed_parity",
+            type: "replay_fault",
+            detail: { reason, direction: "ts→wasm", side, priceTicks, wasm: null, ts: tsLevel },
+          });
+          this.disable(reason);
+          return;
+        }
+      }
+    };
+
+    check(snapshot.bidLevels, tsBids, "BID");
+    if (!this.debugState.enabled) return;
+    check(snapshot.askLevels, tsAsks, "ASK");
   }
 
   private destroyAll(): void {

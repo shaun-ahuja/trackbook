@@ -16,7 +16,8 @@ export type ShadowStepLabel =
   | "divergence_magnet"
   | "shock_sweep"
   | "replenish"
-  | "post_fills";
+  | "post_fills"
+  | "seed_parity";
 
 export type ShadowCommand =
   | {

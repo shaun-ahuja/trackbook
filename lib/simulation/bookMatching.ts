@@ -135,6 +135,9 @@ export function insertLimit(
     nextBook = side === "BID"
       ? { ...nextBook, nextOrderId: nextBook.nextOrderId + 1, bids: insertIntoSide(nextBook.bids, resting) }
       : { ...nextBook, nextOrderId: nextBook.nextOrderId + 1, asks: insertIntoSide(nextBook.asks, resting) };
+    if (lastTradePriceCents !== null) {
+      nextBook = { ...nextBook, lastTradePriceCents, lastTradeTick: ctx.currentTick };
+    }
     return { book: nextBook, fills, lastTradePriceCents, restedOrderId: resting.id };
   }
 

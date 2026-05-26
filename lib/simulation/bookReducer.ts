@@ -607,12 +607,12 @@ export function replenishIfThin(
     if (sideTag === "BID" && magnetWantsBid) {
       const mid = (refBid + refAsk) / 2;
       const placement = magnetLpPlacement(divCtx!, mid, fairCents, refBid, refAsk);
-      px = placement && placement.side === "BID" ? placement.priceCents
+      px = placement && placement.side === "BID" ? snapToTick(placement.priceCents)
         : clampPrice(Math.min(refBid + TICK_CENTS, refAsk - TICK_CENTS));
     } else if (sideTag === "ASK" && magnetWantsAsk) {
       const mid = (refBid + refAsk) / 2;
       const placement = magnetLpPlacement(divCtx!, mid, fairCents, refBid, refAsk);
-      px = placement && placement.side === "ASK" ? placement.priceCents
+      px = placement && placement.side === "ASK" ? snapToTick(placement.priceCents)
         : clampPrice(Math.max(refAsk - TICK_CENTS, refBid + TICK_CENTS));
     } else {
       px = sideTag === "BID"

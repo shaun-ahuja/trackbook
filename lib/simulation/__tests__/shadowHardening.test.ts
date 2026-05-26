@@ -215,6 +215,34 @@ test("shadow hardening keeps accounting comparisons scoped to trustworthy seeds"
   );
 });
 
+test("shadow seed parity: initial state seeds without book divergence", { skip: skipIfWasmMissing() }, async () => {
+  const initial = makeInitialState(FIXED_NOW);
+  const marketIds = initial.marketOrder.slice(0, 4);
+  const { debug } = await runHarness({ marketIds, ticks: 1 });
+
+  assertNoStructuralShadowFailures(debug);
+  assert.equal(debug.enabled, true, "shadow must remain enabled after seeding");
+});
+
+test("sync_desk shadow commands always cancel before insert", { skip: skipIfWasmMissing() }, async () => {
+  const initial = makeInitialState(FIXED_NOW);
+  const marketId = initial.marketOrder[0]!;
+  const { traces } = await runHarness({ marketIds: [marketId], ticks: 160, eventTicks: [20, 60, 120] });
+
+  for (const trace of traces) {
+    for (const step of trace.markets[0]!.steps) {
+      if (step.label !== "sync_desk") continue;
+      let seenInsert = false;
+      for (const cmd of step.commands) {
+        if (cmd.kind === "submit_limit") seenInsert = true;
+        if (cmd.kind === "cancel") {
+          assert.ok(!seenInsert, `cancel after insert in sync_desk at tick ${trace.tick}`);
+        }
+      }
+    }
+  }
+});
+
 test("shadow hardening records full trace coverage for active book-affecting phases", { skip: skipIfWasmMissing() }, async () => {
   const initial = makeInitialState(FIXED_NOW);
   const marketId = initial.marketOrder[0]!;
