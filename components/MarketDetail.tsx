@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import clsx from "clsx";
 import Panel from "./Panel";
 import Sparkline from "./Sparkline";
@@ -72,7 +73,7 @@ function flowSideColor(side: FlowEvent["side"]): string {
 
 type Props = { market: Market; now: number };
 
-export default function MarketDetail({ market, now }: Props) {
+function MarketDetail({ market, now }: Props) {
   const mid = (market.marketBid + market.marketAsk) / 2;
   const fair = market.forecastProb * 100;
   const spread = market.marketAsk - market.marketBid;
@@ -207,3 +208,5 @@ function Metric({
     </div>
   );
 }
+
+export default memo(MarketDetail);

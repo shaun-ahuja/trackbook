@@ -28,16 +28,31 @@ const CONF_EWMA_ALPHA = 0.1;
 // drift normally so reactive markets can keep up.
 const CALM_DEADBAND = 0.004;
 
+// Per-tick delta clamp keeps the displayed forecast smooth in normal
+// operation; event shocks get a wider window so real dislocations register.
+const MAX_DELTA_NORMAL = 0.0125;    // 1.25pp max per tick in calm/alert
+const MAX_DELTA_EVENT_SHOCK = 0.025; // 2.5pp on a real event landing this tick
+
+// Alpha caps. Normal ticks stay in the 0.15–0.20 range; genuine event
+// shocks can use a wider learning rate since the clamp prevents overshoot.
+const ALPHA_CAP_NORMAL = 0.20;
+const ALPHA_CAP_EVENT_SHOCK = 0.50;
+
 function safeFinite(n: number | undefined, fallback: number): number {
   return Number.isFinite(n) ? (n as number) : fallback;
 }
 
 // Kalman-style update of forecastProb toward an externally-provided latent
 // truth. Pure except for the Gaussian seed advancement.
+//
+// isEventShock: caller signals that a meaningful event impact landed on this
+// market this tick (eventImpactMag >= SHOCK_MIN_IMPACT). Widens both the
+// alpha cap and the per-tick delta clamp so real dislocations register fast.
 export function driftForecast(
   market: Market,
   latentTrueProb: number,
   seed: number,
+  isEventShock = false,
 ): { market: Market; seed: number } {
   const conf = safeFinite(market.confidence, 0.55);
   const regime: MarketRegime = market.regimeState?.regime ?? "calm";
@@ -47,26 +62,34 @@ export function driftForecast(
   const trackingGap = Math.abs(latentTrueProb - prevForecast);
   const inCalmDeadband = regime === "calm" && trackingGap < CALM_DEADBAND;
 
-  // Alpha widens with confidence and shock regime; capped at 0.30 so a
-  // single tick can't over-learn. Calm deadband freezes the forecast.
+  // Alpha widens with confidence; shock regime adds a modest boost.
+  // Event shocks bypass the normal cap so the desk can snap to the new fair
+  // value — the per-tick delta clamp below still prevents overshoot.
+  // Calm deadband freezes the forecast entirely.
+  const alphaCap = isEventShock ? ALPHA_CAP_EVENT_SHOCK : ALPHA_CAP_NORMAL;
   const alpha = inCalmDeadband
     ? 0
     : clamp(
-        0.06 + 0.10 * conf + (regime === "shock" ? 0.18 : 0),
+        0.04 + 0.08 * conf + (regime === "shock" ? 0.06 : 0),
         0,
-        0.30,
+        alphaCap,
       );
 
-  // Noise tiny in calm; larger in shock/alert. No dependence on volEst —
-  // vol shapes confidence, not the noise we add to our own quote.
+  // Noise reduced ~3× from prior values. Event shocks don't need extra noise
+  // — the delta clamp already allows a clean step.
   const noiseScale = inCalmDeadband
     ? 0
     : regime === "calm"
-      ? 0.0006 + 0.001 * (1 - conf)
-      : 0.003 + 0.006 * (1 - conf) + (regime === "shock" ? 0.004 : 0);
+      ? 0.0003 + 0.0005 * (1 - conf)
+      : 0.001 + 0.002 * (1 - conf) + (regime === "shock" ? 0.001 : 0);
   const g = gaussian(seed);
+
+  // Clamp the per-tick move so a single noisy tick can't swing fair value
+  // several percentage points. Event shocks get a wider window (2.5pp).
+  const maxDelta = isEventShock ? MAX_DELTA_EVENT_SHOCK : MAX_DELTA_NORMAL;
+  const rawDelta = alpha * (latentTrueProb - prevForecast) + g.v * noiseScale;
   const newForecast = clamp(
-    prevForecast + alpha * (latentTrueProb - prevForecast) + g.v * noiseScale,
+    prevForecast + clamp(rawDelta, -maxDelta, maxDelta),
     0.02,
     0.98,
   );

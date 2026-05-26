@@ -8,7 +8,7 @@ import { clamp } from "../format";
 
 // Decision-engine tuning. Hysteresis + cooldowns so actions persist long
 // enough to read and small noise can't flip the posture every tick.
-const MIN_HOLD_TICKS = 25;            // ~19s at 750ms tick — postures persist
+const MIN_HOLD_TICKS = 4;             // ~3s at 750ms tick — enough to read, not too sticky
 const FLATTEN_EXIT_INV = INVENTORY_LIMIT - 3; // hysteretic flatten exit (5)
 
 // Edge thresholds in cents. Asymmetric so a posture sticks even as edge
@@ -99,7 +99,15 @@ export function decide(
   }
 
   // 4) Quote layout per posture. Inventory-skewed.
-  const { ourBid, ourAsk } = quoteFor(action, mid, skew);
+  // Stickiness: don't repost when the action is unchanged and both bid and ask
+  // move less than 0.5¢ — avoids jitter from small mid-price drift.
+  const { ourBid: rawBid, ourAsk: rawAsk } = quoteFor(action, mid, skew);
+  const quoteSticky =
+    action === prev &&
+    Math.abs(rawBid - market.ourBid) < 0.5 &&
+    Math.abs(rawAsk - market.ourAsk) < 0.5;
+  const ourBid = quoteSticky ? market.ourBid : rawBid;
+  const ourAsk = quoteSticky ? market.ourAsk : rawAsk;
 
   // 5) Narrative stability: rebuild text only when the rationale bucket
   //    actually changes. Includes posture, edge bucket, conf bucket,
@@ -346,3 +354,4 @@ function fmtInv(inv: number): string {
 function pctInt(p: number): string {
   return `${Math.round(p * 100)}%`;
 }
+

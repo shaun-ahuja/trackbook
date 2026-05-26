@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import clsx from "clsx";
 import Panel from "./Panel";
 import type { DriverContribution, Market, MarketRegime } from "@/lib/types";
@@ -30,7 +31,7 @@ const DRIVER_COLOR: Record<DriverContribution["source"], string> = {
   latent_risk: "#5fd7e7",
 };
 
-export default function ForecastPanel({ market, now }: Props) {
+function ForecastPanel({ market, now }: Props) {
   const prob = market.forecastProb;
   const conf = market.confidence;
   const delta = prob - market.prevForecastProb;
@@ -219,3 +220,5 @@ function ConfidenceBar({ value }: { value: number }) {
     </div>
   );
 }
+
+export default memo(ForecastPanel);

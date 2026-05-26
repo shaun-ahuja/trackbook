@@ -50,6 +50,10 @@ const HYBRID_QUIET_TICKS = 40;
 // shock sweep — matches the prior generateShockFill SHOCK_MIN_IMPACT.
 const SHOCK_MIN_IMPACT = 0.06;
 
+// Set NEXT_PUBLIC_DEBUG_DEMO=1 in .env.local to enable per-tick QA traces
+// for the selected market in the browser console.
+const DEBUG_DEMO = process.env.NEXT_PUBLIC_DEBUG_DEMO === "1";
+
 export function reducer(state: SimState, action: SimAction): SimState {
   return reduceWithShadow(state, action).nextState;
 }
@@ -462,13 +466,32 @@ function tick(
     );
 
     // 7) Drift forecast against the freshly-computed latent truth.
-    const drift = driftForecast(m, latentTrueProb, seed);
+    // isEventShock: meaningful impact on this market this tick — widens the
+    // per-tick delta clamp so real dislocations register immediately.
+    const isEventShock = eventImpactMag >= SHOCK_MIN_IMPACT;
+    const drift = driftForecast(m, latentTrueProb, seed, isEventShock);
     m = drift.market;
     seed = drift.seed;
 
     // 8) Decide posture + quote for next tick.
     const dec = decide(m, now, nextTick);
     m = dec.market;
+
+    // QA trace for the selected market. Enable with NEXT_PUBLIC_DEBUG_DEMO=1.
+    // Throttled to every 5 ticks to avoid console pressure.
+    if (DEBUG_DEMO && id === state.selectedMarketId && nextTick % 5 === 0) {
+      console.log("[demo-qa]", {
+        tick: nextTick, market: id,
+        forecastRaw: +latentTrueProb.toFixed(4),
+        forecastSmoothed: +m.forecastProb.toFixed(4),
+        fairValue: m.fairValueCents,
+        syntheticMid: +midSnapshot.toFixed(2),
+        actionFinal: dec.action,
+        inventory: m.inventory,
+        eventShockFlag: isEventShock,
+        reason: m.lastActionReason,
+      });
+    }
 
     // 8.5) Fair-value magnet.
     if (divCtx.mode !== "none") {

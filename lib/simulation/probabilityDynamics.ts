@@ -26,6 +26,10 @@ import { neighborsOf } from "./topology";
 
 const { bounds, meanReversion, shockDecay, regimeMult, volatility, maxBaseJump, latentRisk: LATENT_BOUNDS, driverListSize } = DYNAMICS_CONFIG;
 
+// Damp noisy cross-market spillover so small neighbor shocks don't drive
+// per-tick jitter. Large synthetic events still produce visible moves at 60%.
+const CONTAGION_TICK_DAMPING = 0.60;
+
 function clampProb(p: number): number {
   return clamp(p, bounds.min, bounds.max);
 }
@@ -378,7 +382,7 @@ export function updateMarketState(
   // 2) Compose latent truth from current adaptive base + overlays.
   const { value: latentTrue, drivers: rawDrivers } = computeLatentTrueProbability(
     withDecay,
-    contagionDelta,
+    contagionDelta * CONTAGION_TICK_DAMPING,
     stress,
     regime,
   );

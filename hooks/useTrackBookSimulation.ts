@@ -6,6 +6,7 @@ import { makeInitialState } from "@/lib/simulation/markets";
 import { ShadowSimulationRuntime } from "@/lib/simulation/shadowRuntime";
 import { WasmMarketAdapter } from "@/lib/simulation/wasmAdapter";
 import { MatchingEngineKernel } from "@/lib/wasm/orderBookKernel";
+import { INVENTORY_LIMIT } from "@/lib/types";
 import type { DataSourceMode, Market, OptimizerDecision, TransitEvent } from "@/lib/types";
 import { fetchOptimizerDecision } from "@/lib/optimizer";
 import { DEMO_SCENARIOS, type ScenarioName } from "@/lib/simulation/scenarios";
@@ -46,6 +47,11 @@ export function useTrackBookSimulation(): UseTrackBookSimulation {
   const kernelRef = useRef<MatchingEngineKernel | null>(null);
   // Track in-flight optimizer requests to avoid stale updates
   const optimizerTickRef = useRef<number>(0);
+  // Wall time of the last tick dispatch — used to skip catch-up bursts when
+  // the browser falls behind (tab backgrounded, heavy render, etc.).
+  const lastTickWallRef = useRef<number>(0);
+  // Last action returned by fetchOptimizerDecision; passed back as inertia anchor.
+  const lastOptimizerActionRef = useRef<string>("");
 
   useEffect(() => {
     stateRef.current = state;
@@ -108,9 +114,15 @@ export function useTrackBookSimulation(): UseTrackBookSimulation {
       const marketId = nextState.selectedMarketId;
       const thisTick = nextState.tick;
       optimizerTickRef.current = thisTick;
-      void fetchOptimizerDecision(nextState, marketId).then((result) => {
+      const prevFirstAction = lastOptimizerActionRef.current;
+      const mkt = nextState.markets[marketId];
+      const isShock = mkt?.regimeState?.regime === "shock";
+      const hardInvBreach = Math.abs(mkt?.inventory ?? 0) >= INVENTORY_LIMIT - 1;
+      const invRiskRatio = Math.abs(mkt?.inventory ?? 0) / INVENTORY_LIMIT;
+      void fetchOptimizerDecision(nextState, marketId, prevFirstAction, isShock, hardInvBreach, invRiskRatio).then((result) => {
         // Discard stale results if a newer tick has already fired
         if (result && optimizerTickRef.current === thisTick) {
+          lastOptimizerActionRef.current = result.selectedFirstAction;
           setOptimizerDecision({ ...result, computedAtTick: thisTick });
         }
       });
@@ -145,7 +157,16 @@ export function useTrackBookSimulation(): UseTrackBookSimulation {
   useEffect(() => {
     if (state.paused) return;
     const id = setInterval(() => {
-      dispatch({ type: "TICK", now: Date.now() });
+      const now = Date.now();
+      const elapsed = now - lastTickWallRef.current;
+      // Catch-up guard: skip if the interval fired too soon after the last tick
+      // (browser stall / tab resume burst).
+      if (elapsed < TICK_MS * 0.75) return;
+      // Drift correction: advance the expected-tick baseline by exactly one
+      // period so small jitter averages out. If very late (>2× period), reset
+      // to now so we don't accumulate a debt of missed ticks.
+      lastTickWallRef.current = elapsed > TICK_MS * 2 ? now : lastTickWallRef.current + TICK_MS;
+      dispatch({ type: "TICK", now });
     }, TICK_MS);
     return () => clearInterval(id);
   }, [dispatch, state.paused]);
@@ -207,10 +228,13 @@ export function useTrackBookSimulation(): UseTrackBookSimulation {
 
       // Fire the optimizer immediately with the patched state (stateRef.current
       // is already updated synchronously by dispatch).
+      // Reset inertia anchor — scenario is an intentional state jump, bypass penalty.
+      lastOptimizerActionRef.current = "";
       const thisTick = stateRef.current.tick;
       optimizerTickRef.current = thisTick;
-      void fetchOptimizerDecision(stateRef.current, marketId).then((result) => {
+      void fetchOptimizerDecision(stateRef.current, marketId, "", true, false, 0).then((result) => {
         if (result) {
+          lastOptimizerActionRef.current = result.selectedFirstAction;
           setOptimizerDecision({ ...result, computedAtTick: thisTick });
         }
       });

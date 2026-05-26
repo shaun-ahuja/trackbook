@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import clsx from "clsx";
 import Panel from "./Panel";
 import {
@@ -74,7 +75,7 @@ const REGIME_STYLES: Record<MarketRegime, { bg: string; fg: string }> = {
   recovery: { bg: "#0d2129", fg: "#5fd7e7" },
 };
 
-export default function DecisionPanel({ market, fills, tick, optimizerDecision }: Props) {
+function DecisionPanel({ market, fills, tick, optimizerDecision }: Props) {
   const fair = market.forecastProb * 100;
   const mid = (market.marketBid + market.marketAsk) / 2;
   const edge = fair - mid;
@@ -111,6 +112,9 @@ export default function DecisionPanel({ market, fills, tick, optimizerDecision }
         className="rounded-[2px] border px-3 py-2"
         style={{ background: action.bg, borderColor: action.border }}
       >
+        <div className="mb-0.5 text-[8px] uppercase tracking-[0.2em] text-[var(--color-muted)]">
+          desk posture
+        </div>
         <div className="flex items-baseline justify-between gap-2">
           <span
             className="text-[18px] font-bold tracking-[0.14em]"
@@ -253,8 +257,11 @@ function OptimizerSection({ decision, tick }: { decision: OptimizerDecision; tic
         </span>
       </div>
 
-      {/* Selected action badge */}
+      {/* Selected action badge — raw Julia output */}
       <div className="mt-1 flex items-center gap-1.5">
+        <span className="text-[9px] uppercase tracking-[0.16em] text-[var(--color-muted)]">
+          Julia rec
+        </span>
         <span className="rounded-[1px] bg-[#0d1e2e] px-1.5 py-0.5 text-[10px] font-bold tracking-[0.16em] text-[#5fd7e7]">
           {decision.selectedFirstAction}
         </span>
@@ -407,3 +414,5 @@ function QuoteTile({ side, value }: { side: "bid" | "ask"; value: number }) {
     </div>
   );
 }
+
+export default memo(DecisionPanel);

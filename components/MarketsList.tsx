@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import clsx from "clsx";
 import Panel from "./Panel";
 import type { Market, TransitEvent } from "@/lib/types";
@@ -15,7 +16,7 @@ type Props = {
   watchlistIds?: readonly string[];
 };
 
-export default function MarketsList({
+function MarketsList({
   markets,
   selectedId,
   onSelect,
@@ -131,3 +132,5 @@ export default function MarketsList({
     </Panel>
   );
 }
+
+export default memo(MarketsList);

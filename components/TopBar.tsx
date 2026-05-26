@@ -1,12 +1,12 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import clsx from "clsx";
 import { clockHHMMSS } from "@/lib/format";
 import type { DataSourceMode } from "@/lib/types";
 import type { ViewMode } from "@/lib/view";
 
 type Props = {
-  now: number;
   tick: number;
   paused: boolean;
   dataSource: DataSourceMode;
@@ -28,7 +28,6 @@ const MODE_LABEL: Record<DataSourceMode, string> = {
 const MODE_ORDER: DataSourceMode[] = ["synthetic", "hybrid", "mta"];
 
 export default function TopBar({
-  now,
   tick,
   paused,
   dataSource,
@@ -40,6 +39,13 @@ export default function TopBar({
   watchlistCount,
   onExitView,
 }: Props) {
+  // Local clock: only TopBar re-renders for time display, not the whole tree.
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, []);
+
   const viewChip =
     viewMode === "desk"
       ? "DESK"

@@ -75,7 +75,6 @@ export default function Terminal() {
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#050709]">
       <TopBar
-        now={state.now}
         tick={state.tick}
         paused={state.paused}
         dataSource={state.dataSource}
