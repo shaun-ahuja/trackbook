@@ -80,6 +80,8 @@ export function reduceWithShadow(
         nextState: { ...state, dataSource: action.mode, ticksSinceMtaEvent: 0 },
         shadowTrace: null,
       };
+    case "APPLY_SCENARIO":
+      return { nextState: applyScenario(state, action.patch), shadowTrace: null };
     default:
       return { nextState: state, shadowTrace: null };
   }
@@ -123,6 +125,57 @@ function pushShadowStep(
     expectedFills: normalizeExpectedFills(fills),
     expectedAccounting: accounting,
   });
+}
+
+function applyScenario(state: SimState, patch: import("../types").ScenarioPatch): SimState {
+  const marketId = patch.marketId ?? state.selectedMarketId;
+  const m = state.markets[marketId];
+  if (!m) return state;
+
+  const mid = (m.marketBid + m.marketAsk) / 2;
+
+  const patchedMarket: Market = {
+    ...m,
+    ...(patch.inventory !== undefined
+      ? {
+          inventory: patch.inventory,
+          // Reset avgCost to mid so unrealizedPnl starts at 0 rather than a
+          // stale value computed from the old fill price.
+          avgCost: patch.inventory !== 0 ? mid : 0,
+          unrealizedPnl: 0,
+        }
+      : {}),
+    ...(patch.regime !== undefined
+      ? {
+          regimeState: {
+            ...m.regimeState,
+            regime: patch.regime,
+            enteredTick: state.tick,
+            ticksSinceEvent: 0,
+            ticksSinceShock: patch.regime === "shock" ? 0 : m.regimeState.ticksSinceShock,
+          },
+        }
+      : {}),
+    ...(patch.confidence !== undefined ? { confidence: patch.confidence } : {}),
+    ...(patch.forecastProb !== undefined
+      ? {
+          forecastProb: patch.forecastProb,
+          fairValueCents: Math.round(patch.forecastProb * 1000) / 10,
+        }
+      : {}),
+    ...(patch.vol !== undefined
+      ? {
+          vol: patch.vol,
+          dynamics: { ...m.dynamics, volatilityEstimate: patch.vol },
+        }
+      : {}),
+  };
+
+  return {
+    ...state,
+    ...(patch.rngState !== undefined ? { rngState: patch.rngState } : {}),
+    markets: { ...state.markets, [marketId]: patchedMarket },
+  };
 }
 
 function injectEvents(state: SimState, incoming: TransitEvent[]): SimState {

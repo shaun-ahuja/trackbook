@@ -327,10 +327,63 @@ export type SimState = {
   ticksSinceMtaEvent: number;
 };
 
+// --- Julia / JuMP optimizer types ---
+
+export type OptimizerPlanWeight = {
+  planIndex: number;
+  firstAction: string;
+  policyName: string;
+  weight: number;
+};
+
+export type OptimizerTrajectoryStats = {
+  planIndex: number;
+  firstAction: string;
+  policyName: string;
+  meanReturn: number;
+  stdReturn: number;
+  cvarReturn: number;
+  fillProbability: number;
+  meanInvFinal: number;
+};
+
+export type OptimizerBindingConstraint = {
+  name: string;
+  dualValue: number;
+  interpretation: string;
+};
+
+export type OptimizerDecision = {
+  selectedPlanIndex: number;
+  selectedFirstAction: string;
+  selectedPolicyName: string;
+  mixingDistribution: OptimizerPlanWeight[];
+  trajectoryStats: OptimizerTrajectoryStats[];
+  bindingConstraints: OptimizerBindingConstraint[];
+  explanation: string;
+  solveStatus: string;
+  solveDurationMs: number;
+  // Set by the client to indicate when the result was received
+  computedAtTick: number;
+};
+
+// Patch applied by demo scenario injection. Only the fields present are changed;
+// undefined fields are left at their current simulation values.
+export type ScenarioPatch = {
+  marketId?: string;
+  inventory?: number;
+  regime?: MarketRegime;
+  confidence?: number;
+  forecastProb?: number;   // 0–1; shifts fair value (forecastProb × 100 = fair ¢)
+  vol?: number;
+  rngState?: number;
+};
+
 export type SimAction =
   | { type: "TICK"; now: number }
   | { type: "SELECT"; marketId: string }
   | { type: "TOGGLE_PAUSE" }
   | { type: "RESEED" }
   | { type: "INJECT_EVENTS"; events: TransitEvent[] }
-  | { type: "SET_DATA_SOURCE"; mode: DataSourceMode };
+  | { type: "SET_DATA_SOURCE"; mode: DataSourceMode }
+  | { type: "APPLY_SCENARIO"; patch: ScenarioPatch };

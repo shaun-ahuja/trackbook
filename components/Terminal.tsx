@@ -9,6 +9,7 @@ import ForecastPanel from "./ForecastPanel";
 import DecisionPanel from "./DecisionPanel";
 import EventTape from "./EventTape";
 import PnLPanel from "./PnLPanel";
+import ScenarioBar from "./ScenarioBar";
 import { useTrackBookSimulation } from "@/hooks/useTrackBookSimulation";
 import { useTerminalView } from "@/hooks/useTerminalView";
 import { visibleEvents, visiblePositionMarkets } from "@/lib/view";
@@ -19,10 +20,13 @@ export default function Terminal() {
     marketsArr,
     selected,
     latestEvent,
+    optimizerDecision,
+    activeScenario,
     selectMarket,
     togglePause,
     reseed,
     setDataSource,
+    applyScenario,
   } = useTrackBookSimulation();
 
   const {
@@ -84,6 +88,8 @@ export default function Terminal() {
         onExitView={exitView}
       />
 
+      <ScenarioBar active={activeScenario} onApply={applyScenario} />
+
       <main
         className="grid min-h-0 flex-1 gap-1.5 p-1.5"
         style={{
@@ -111,7 +117,7 @@ export default function Terminal() {
           <MarketDetail market={selected} now={state.now} />
         </div>
         <div style={{ gridArea: "decision" }} className="min-h-0">
-          <DecisionPanel market={selected} fills={state.fills} tick={state.tick} />
+          <DecisionPanel market={selected} fills={state.fills} tick={state.tick} optimizerDecision={optimizerDecision} />
         </div>
         <div style={{ gridArea: "forecast" }} className="min-h-0">
           <ForecastPanel market={selected} now={state.now} />

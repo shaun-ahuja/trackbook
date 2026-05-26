@@ -11,7 +11,9 @@
     "test:engine:native": "node scripts/test-matching-engine-native.mjs",
     "test:engine:parity": "node --experimental-strip-types --test lib/wasm/__tests__/matchingEngineParity.test.ts",
     "test:shadow": "node --import tsx --test lib/simulation/__tests__/shadowTrace.test.ts lib/simulation/__tests__/shadowRuntime.test.ts lib/simulation/__tests__/shadowHardening.test.ts",
-    "test:wasm-auth": "node --import tsx --test lib/simulation/__tests__/wasmAuthoritative.test.ts"
+    "test:wasm-auth": "node --import tsx --test lib/simulation/__tests__/wasmAuthoritative.test.ts",
+    "test:rollout": "node --import tsx --test lib/simulation/__tests__/rollout.test.ts",
+    "test:scenarios": "node --import tsx --test lib/simulation/__tests__/optimizerScenarios.test.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",

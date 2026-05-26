@@ -6,7 +6,9 @@ import { makeInitialState } from "@/lib/simulation/markets";
 import { ShadowSimulationRuntime } from "@/lib/simulation/shadowRuntime";
 import { WasmMarketAdapter } from "@/lib/simulation/wasmAdapter";
 import { MatchingEngineKernel } from "@/lib/wasm/orderBookKernel";
-import type { DataSourceMode, Market, TransitEvent } from "@/lib/types";
+import type { DataSourceMode, Market, OptimizerDecision, TransitEvent } from "@/lib/types";
+import { fetchOptimizerDecision } from "@/lib/optimizer";
+import { DEMO_SCENARIOS, type ScenarioName } from "@/lib/simulation/scenarios";
 import { useMtaAlerts } from "@/hooks/useMtaAlerts";
 import { useMtaTrips } from "@/hooks/useMtaTrips";
 
@@ -20,19 +22,30 @@ export type UseTrackBookSimulation = {
   marketsArr: Market[];
   selected: Market;
   latestEvent: TransitEvent | undefined;
+  // Julia / JuMP optimizer decision — null when unavailable or computing.
+  optimizerDecision: OptimizerDecision | null;
+  // Active demo scenario name, or null for live mode.
+  activeScenario: ScenarioName | null;
   // Controls.
   selectMarket: (id: string) => void;
   togglePause: () => void;
   reseed: () => void;
   setDataSource: (mode: DataSourceMode) => void;
+  // Injects a deterministic scenario patch and immediately fires the optimizer.
+  // Pass null to clear the scenario (does not auto-resume — call togglePause to resume).
+  applyScenario: (name: ScenarioName | null) => void;
 };
 
 export function useTrackBookSimulation(): UseTrackBookSimulation {
   const [state, setState] = useState(() => makeInitialState(FIXED_EPOCH));
+  const [optimizerDecision, setOptimizerDecision] = useState<OptimizerDecision | null>(null);
+  const [activeScenario, setActiveScenario] = useState<ScenarioName | null>(null);
   const stateRef = useRef(state);
   const runtimeRef = useRef<ShadowSimulationRuntime | null>(null);
   const adaptersRef = useRef<Map<string, WasmMarketAdapter> | null>(null);
   const kernelRef = useRef<MatchingEngineKernel | null>(null);
+  // Track in-flight optimizer requests to avoid stale updates
+  const optimizerTickRef = useRef<number>(0);
 
   useEffect(() => {
     stateRef.current = state;
@@ -88,6 +101,20 @@ export function useTrackBookSimulation(): UseTrackBookSimulation {
     const { nextState, shadowTrace } = reduceWithShadow(stateRef.current, action, adapters);
     stateRef.current = nextState;
     setState(nextState);
+
+    // Fire async optimizer request after each tick. Non-blocking — the
+    // previous tick's decision stays displayed until the new one arrives.
+    if (action.type === "TICK") {
+      const marketId = nextState.selectedMarketId;
+      const thisTick = nextState.tick;
+      optimizerTickRef.current = thisTick;
+      void fetchOptimizerDecision(nextState, marketId).then((result) => {
+        // Discard stale results if a newer tick has already fired
+        if (result && optimizerTickRef.current === thisTick) {
+          setOptimizerDecision({ ...result, computedAtTick: thisTick });
+        }
+      });
+    }
 
     if (action.type === "RESEED") {
       const kernel = kernelRef.current;
@@ -162,14 +189,46 @@ export function useTrackBookSimulation(): UseTrackBookSimulation {
     [dispatch],
   );
 
+  const applyScenario = useCallback(
+    (name: ScenarioName | null) => {
+      setActiveScenario(name);
+      if (name === null) return;
+
+      const { patch } = DEMO_SCENARIOS[name];
+      const marketId = stateRef.current.selectedMarketId;
+
+      // Pause the simulation so the next tick doesn't overwrite the patch
+      // before the optimizer fires. User can un-pause after reviewing results.
+      if (!stateRef.current.paused) {
+        dispatch({ type: "TOGGLE_PAUSE" });
+      }
+
+      dispatch({ type: "APPLY_SCENARIO", patch: { ...patch, marketId } });
+
+      // Fire the optimizer immediately with the patched state (stateRef.current
+      // is already updated synchronously by dispatch).
+      const thisTick = stateRef.current.tick;
+      optimizerTickRef.current = thisTick;
+      void fetchOptimizerDecision(stateRef.current, marketId).then((result) => {
+        if (result) {
+          setOptimizerDecision({ ...result, computedAtTick: thisTick });
+        }
+      });
+    },
+    [dispatch],
+  );
+
   return {
     state,
     marketsArr,
     selected,
     latestEvent,
+    optimizerDecision,
+    activeScenario,
     selectMarket,
     togglePause,
     reseed,
     setDataSource,
+    applyScenario,
   };
 }

@@ -8,11 +8,17 @@ import {
   type Market,
   type MarketAction,
   type MarketRegime,
+  type OptimizerDecision,
   type RiskPosture,
 } from "@/lib/types";
 import { clockHHMMSS, signed } from "@/lib/format";
 
-type Props = { market: Market; fills: Fill[]; tick: number };
+type Props = {
+  market: Market;
+  fills: Fill[];
+  tick: number;
+  optimizerDecision: OptimizerDecision | null;
+};
 
 const ACTION_STYLES: Record<
   MarketAction,
@@ -68,7 +74,7 @@ const REGIME_STYLES: Record<MarketRegime, { bg: string; fg: string }> = {
   recovery: { bg: "#0d2129", fg: "#5fd7e7" },
 };
 
-export default function DecisionPanel({ market, fills, tick }: Props) {
+export default function DecisionPanel({ market, fills, tick, optimizerDecision }: Props) {
   const fair = market.forecastProb * 100;
   const mid = (market.marketBid + market.marketAsk) / 2;
   const edge = fair - mid;
@@ -179,6 +185,17 @@ export default function DecisionPanel({ market, fills, tick }: Props) {
         </div>
       </section>
 
+      {optimizerDecision ? (
+        <OptimizerSection decision={optimizerDecision} tick={tick} />
+      ) : (
+        <section className="mt-3">
+          <SectionLabel>julia / jump optimizer</SectionLabel>
+          <p className="mt-1 text-[11px] text-[var(--color-muted)]">
+            computing…
+          </p>
+        </section>
+      )}
+
       <section className="mt-3">
         <SectionLabel>
           recent fills · {recentFills.length === 0 ? "—" : recentFills.length}
@@ -217,6 +234,125 @@ export default function DecisionPanel({ market, fills, tick }: Props) {
         )}
       </section>
     </Panel>
+  );
+}
+
+function OptimizerSection({ decision, tick }: { decision: OptimizerDecision; tick: number }) {
+  const staleTicks = tick - decision.computedAtTick;
+  const top3 = decision.mixingDistribution.slice(0, 3);
+  const selectedStats = decision.trajectoryStats.find(
+    (s) => s.planIndex === decision.selectedPlanIndex,
+  );
+
+  return (
+    <section className="mt-3">
+      <div className="flex items-center justify-between">
+        <SectionLabel>julia / jump optimizer</SectionLabel>
+        <span className="text-[9px] uppercase tracking-[0.18em] text-[var(--color-muted)]">
+          {staleTicks > 0 ? `${staleTicks}t ago` : "live"}
+        </span>
+      </div>
+
+      {/* Selected action badge */}
+      <div className="mt-1 flex items-center gap-1.5">
+        <span className="rounded-[1px] bg-[#0d1e2e] px-1.5 py-0.5 text-[10px] font-bold tracking-[0.16em] text-[#5fd7e7]">
+          {decision.selectedFirstAction}
+        </span>
+        <span className="text-[10px] text-[var(--color-muted)]">
+          {decision.selectedPolicyName}
+        </span>
+        <span className="ml-auto text-[9px] text-[var(--color-muted)]">
+          {decision.solveStatus === "GREEDY_FALLBACK" ? "greedy" : "cvarlp"}
+        </span>
+      </div>
+
+      {/* Trajectory stats */}
+      {selectedStats ? (
+        <div className="mt-1.5 grid grid-cols-3 gap-1 text-[10px]">
+          <StatBubble label="μ return" value={selectedStats.meanReturn.toFixed(2)} />
+          <StatBubble
+            label="CVaR 10%"
+            value={(-selectedStats.cvarReturn).toFixed(2)}
+            tone={selectedStats.cvarReturn > 2 ? "warn" : "default"}
+          />
+          <StatBubble
+            label="fill prob"
+            value={`${(selectedStats.fillProbability * 100).toFixed(0)}%`}
+          />
+        </div>
+      ) : null}
+
+      {/* Mixing distribution top-3 */}
+      {top3.length > 1 ? (
+        <div className="mt-1.5 space-y-0.5">
+          {top3.map((p) => (
+            <div key={p.planIndex} className="flex items-center gap-1.5 text-[10px]">
+              <div
+                className="h-1 rounded-[1px] bg-[#5fd7e7]"
+                style={{ width: `${Math.max(4, p.weight * 80)}px` }}
+              />
+              <span className="text-[var(--color-muted)]">
+                {(p.weight * 100).toFixed(0)}%
+              </span>
+              <span className="text-[var(--color-foreground)]">
+                {p.firstAction}
+              </span>
+              <span className="text-[var(--color-muted)]">{p.policyName}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {/* Binding constraints */}
+      {decision.bindingConstraints.filter(b => b.name !== "plan_mixture").length > 0 ? (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {decision.bindingConstraints
+            .filter((b) => b.name !== "plan_mixture")
+            .map((b) => (
+              <span
+                key={b.name}
+                className="rounded-[1px] bg-[#221e0d] px-1 py-0.5 text-[9px] tracking-[0.14em] text-[var(--color-warn)]"
+                title={b.interpretation}
+              >
+                {b.name}
+              </span>
+            ))}
+        </div>
+      ) : null}
+
+      {/* Explanation text from Julia */}
+      {decision.explanation ? (
+        <div className="mt-2 rounded-[2px] border border-[var(--color-panel-border)] bg-[#060a0f] px-2 py-1.5">
+          <pre className="whitespace-pre-wrap font-mono text-[9px] leading-[1.65] text-[var(--color-muted)]">
+            {decision.explanation}
+          </pre>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function StatBubble({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: string;
+  tone?: "default" | "warn";
+}) {
+  return (
+    <div className="rounded-[2px] border border-[var(--color-panel-border)] bg-[#0a0f15] px-1.5 py-1">
+      <div className="text-[8px] uppercase tracking-[0.16em] text-[var(--color-muted)]">{label}</div>
+      <div
+        className={clsx(
+          "tab-num text-[12px]",
+          tone === "warn" ? "text-[var(--color-warn)]" : "text-[var(--color-foreground)]",
+        )}
+      >
+        {value}
+      </div>
+    </div>
   );
 }
 
