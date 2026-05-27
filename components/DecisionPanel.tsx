@@ -12,6 +12,7 @@ import {
   type MarketAction,
   type MarketRegime,
   type OptimizerDecision,
+  type OptimizerHealth,
   type RiskPosture,
 } from "@/lib/types";
 import { clockHHMMSS, signed } from "@/lib/format";
@@ -21,6 +22,8 @@ type Props = {
   fills: Fill[];
   tick: number;
   optimizerDecision: OptimizerDecision | null;
+  optimizerHealth: OptimizerHealth;
+  lastJuliaSuccessTick: number;
 };
 
 const ACTION_STYLES: Record<
@@ -77,7 +80,14 @@ const REGIME_STYLES: Record<MarketRegime, { bg: string; fg: string }> = {
   recovery: { bg: "#0d2129", fg: "#5fd7e7" },
 };
 
-function DecisionPanel({ market, fills, tick, optimizerDecision }: Props) {
+const HEALTH_STYLES: Record<OptimizerHealth, { bg: string; fg: string; label: string }> = {
+  warming_up:    { bg: "#101820", fg: "#7d8a99", label: "OPTIMIZER · WARMING" },
+  connected:     { bg: "#0e2a1f", fg: "#3ddc97", label: "OPTIMIZER · CONNECTED" },
+  degraded:      { bg: "#221e0d", fg: "#f5b042", label: "OPTIMIZER · DEGRADED" },
+  fallback_only: { bg: "#2d1219", fg: "#ff5a78", label: "OPTIMIZER · FALLBACK" },
+};
+
+function DecisionPanel({ market, fills, tick, optimizerDecision, optimizerHealth, lastJuliaSuccessTick }: Props) {
   const fair = market.forecastProb * 100;
   const mid = (market.marketBid + market.marketAsk) / 2;
   const edge = fair - mid;
@@ -85,6 +95,7 @@ function DecisionPanel({ market, fills, tick, optimizerDecision }: Props) {
   const posture = POSTURE_STYLES[market.riskPosture];
   const regime = market.regimeState?.regime ?? "calm";
   const regimeStyle = REGIME_STYLES[regime];
+  const health = HEALTH_STYLES[optimizerHealth];
   const ticksInRegime = Math.max(0, tick - (market.regimeState?.enteredTick ?? 0));
   const invPct = Math.abs(market.inventory) / INVENTORY_LIMIT;
   const recentFills = fills.filter((f) => f.marketId === market.id).slice(0, 4);
@@ -100,6 +111,12 @@ function DecisionPanel({ market, fills, tick, optimizerDecision }: Props) {
             style={{ background: regimeStyle.bg, color: regimeStyle.fg }}
           >
             {regime.toUpperCase()} · {ticksInRegime}t
+          </span>
+          <span
+            className="rounded-[1px] px-1.5 py-0.5 text-[9px] font-bold tracking-[0.18em]"
+            style={{ background: health.bg, color: health.fg }}
+          >
+            {health.label}
           </span>
           <span
             className="rounded-[1px] px-1.5 py-0.5 text-[9px] font-bold tracking-[0.18em]"
@@ -197,12 +214,12 @@ function DecisionPanel({ market, fills, tick, optimizerDecision }: Props) {
       </section>
 
       {optimizerDecision ? (
-        <OptimizerSection decision={optimizerDecision} tick={tick} />
+        <OptimizerSection decision={optimizerDecision} tick={tick} optimizerHealth={optimizerHealth} lastJuliaSuccessTick={lastJuliaSuccessTick} />
       ) : (
         <section className="mt-3">
           <SectionLabel>julia / jump optimizer</SectionLabel>
           <p className="mt-1 text-[11px] text-[var(--color-muted)]">
-            computing…
+            initializing…
           </p>
         </section>
       )}
@@ -248,7 +265,17 @@ function DecisionPanel({ market, fills, tick, optimizerDecision }: Props) {
   );
 }
 
-function OptimizerSection({ decision, tick }: { decision: OptimizerDecision; tick: number }) {
+function OptimizerSection({
+  decision,
+  tick,
+  optimizerHealth,
+  lastJuliaSuccessTick,
+}: {
+  decision: OptimizerDecision;
+  tick: number;
+  optimizerHealth: OptimizerHealth;
+  lastJuliaSuccessTick: number;
+}) {
   const staleTicks = tick - decision.computedAtTick;
   const top3 = decision.mixingDistribution.slice(0, 3);
   const selectedStats = decision.trajectoryStats.find(
@@ -278,9 +305,31 @@ function OptimizerSection({ decision, tick }: { decision: OptimizerDecision; tic
           {decision.selectedPolicyName}
         </span>
         <span className="ml-auto text-[9px] text-[var(--color-muted)]">
-          {decision.solveStatus === "GREEDY_FALLBACK" ? "greedy" : "cvarlp"}
+          {decision.solveStatus === "GREEDY_FALLBACK"
+            ? "greedy"
+            : decision.solveStatus === "TS_GREEDY_FALLBACK"
+              ? "ts-greedy"
+              : decision.solveStatus === "SAFE_DEFAULT"
+                ? "safe-pass"
+                : "cvarlp"}
         </span>
       </div>
+
+      {/* Provisional notice — shown while Julia has not yet responded */}
+      {(decision.solveStatus === "TS_GREEDY_FALLBACK" || decision.solveStatus === "SAFE_DEFAULT") && (
+        <p className="mt-1 rounded-[2px] border border-[#3a3215] bg-[#221e0d] px-2 py-1 text-[9px] text-[var(--color-warn)]">
+          {optimizerHealth === "fallback_only" && lastJuliaSuccessTick === -1
+            ? "Julia backend unavailable; using local fallback policy."
+            : "Local fallback policy shown while Julia warms up."}
+        </p>
+      )}
+
+      {/* Debug row — Julia connectivity status */}
+      <p className="mt-0.5 text-[9px] text-[var(--color-muted)]">
+        {lastJuliaSuccessTick === -1
+          ? "julia: never connected"
+          : `julia: last ok tick ${lastJuliaSuccessTick}`}
+      </p>
 
       {/* Trajectory stats — always visible (Tier 1/2) */}
       {selectedStats ? (

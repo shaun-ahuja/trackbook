@@ -1,6 +1,7 @@
 using HTTP
 using JSON3
 using StructTypes
+using Dates
 
 # Include and activate the optimizer module
 include("TrackBookOptimizer.jl")
@@ -10,23 +11,35 @@ using .TrackBookOptimizer.Types
 const PORT = 2024
 
 function handle_optimize(req::HTTP.Request)::HTTP.Response
+    t0 = time()
     try
         body = String(req.body)
+        @info "Optimize request received" bytes=length(body)
         matrix = JSON3.read(body, ScenarioMatrix)
+        @info "Matrix parsed" plans=matrix.N scenarios=matrix.M horizon=matrix.H
         result = optimize_matrix(matrix)
+        elapsed = round((time() - t0) * 1000, digits=1)
+        @info "Optimize complete" status=result.solveStatus elapsed_ms=elapsed
         response_body = JSON3.write(result)
         return HTTP.Response(200, ["Content-Type" => "application/json"], response_body)
     catch e
+        elapsed = round((time() - t0) * 1000, digits=1)
         msg = sprint(showerror, e, catch_backtrace())
-        @warn "Optimizer error" exception = msg
+        @error "Optimizer error" elapsed_ms=elapsed exception=msg
         return HTTP.Response(500, ["Content-Type" => "application/json"],
             JSON3.write(Dict("error" => string(e), "detail" => msg)))
     end
 end
 
 function handle_health(req::HTTP.Request)::HTTP.Response
-    return HTTP.Response(200, ["Content-Type" => "application/json"],
-        JSON3.write(Dict("status" => "ok", "port" => PORT)))
+    payload = Dict(
+        "status" => "ok",
+        "port" => PORT,
+        "timestamp" => string(Dates.now()),
+        "juliaVersion" => string(VERSION),
+        "optimizerReady" => true,
+    )
+    return HTTP.Response(200, ["Content-Type" => "application/json"], JSON3.write(payload))
 end
 
 function router(req::HTTP.Request)::HTTP.Response

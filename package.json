@@ -13,7 +13,8 @@
     "test:shadow": "node --import tsx --test lib/simulation/__tests__/shadowTrace.test.ts lib/simulation/__tests__/shadowRuntime.test.ts lib/simulation/__tests__/shadowHardening.test.ts",
     "test:wasm-auth": "node --import tsx --test lib/simulation/__tests__/wasmAuthoritative.test.ts",
     "test:rollout": "node --import tsx --test lib/simulation/__tests__/rollout.test.ts",
-    "test:scenarios": "node --import tsx --test lib/simulation/__tests__/optimizerScenarios.test.ts"
+    "test:scenarios": "node --import tsx --test lib/simulation/__tests__/optimizerScenarios.test.ts",
+    "test:optimizer-fallback": "node --import tsx --test lib/simulation/__tests__/optimizerFallback.test.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",

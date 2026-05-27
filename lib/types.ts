@@ -379,6 +379,8 @@ export type ScenarioPatch = {
   rngState?: number;
 };
 
+export type OptimizerHealth = "warming_up" | "connected" | "degraded" | "fallback_only";
+
 export type SimAction =
   | { type: "TICK"; now: number }
   | { type: "SELECT"; marketId: string }
