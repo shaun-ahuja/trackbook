@@ -43,19 +43,19 @@ export default function Terminal() {
     onSelectMarket: selectMarket,
   });
 
-  const { tourActive } = useHelp();
+  const { tourActive, introOpen } = useHelp();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        // TourOverlay owns Escape when tour is active
-        if (tourActive) return;
+        // IntroModal and TourOverlay own Escape when active
+        if (introOpen || tourActive) return;
         exitView();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [exitView, tourActive]);
+  }, [exitView, introOpen, tourActive]);
 
   const filteredEvents = useMemo(
     () => visibleEvents(state.events, viewMode, activeIds),

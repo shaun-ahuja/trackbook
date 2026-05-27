@@ -16,6 +16,7 @@ const STORAGE_KEY = "ta.help.v1";
 // ── State ──────────────────────────────────────────────────────────────────
 
 type HelpState = {
+  introOpen: boolean;
   tourActive: boolean;
   tourStepIndex: number;
   // true only when user explicitly completes tour or checks "don't show again"
@@ -30,6 +31,9 @@ type HelpState = {
 // ── Actions ────────────────────────────────────────────────────────────────
 
 type HelpAction =
+  | { type: "OPEN_INTRO" }
+  | { type: "INTRO_START_TOUR" }       // close intro → begin tour
+  | { type: "INTRO_JUMP_IN" }          // close intro, session only
   | { type: "START_TOUR" }
   | { type: "ADVANCE_TOUR" }
   | { type: "RETREAT_TOUR" }
@@ -63,6 +67,7 @@ function writeDismissed(): void {
 
 function makeInitial(): HelpState {
   return {
+    introOpen: false,
     tourActive: false,
     tourStepIndex: 0,
     tourDismissed: readDismissed(),
@@ -76,6 +81,26 @@ function makeInitial(): HelpState {
 
 function reducer(state: HelpState, action: HelpAction): HelpState {
   switch (action.type) {
+    case "OPEN_INTRO":
+      return { ...state, introOpen: true };
+
+    case "INTRO_START_TOUR":
+      return {
+        ...state,
+        introOpen: false,
+        tourActive: true,
+        tourStepIndex: 0,
+        glossaryOpen: false,
+        glossaryActiveTerm: null,
+        activePanelInfoId: null,
+        activePanelInfoAnchor: null,
+        quickStartOpen: false,
+      };
+
+    case "INTRO_JUMP_IN":
+      // Session-only dismiss — no persistence, tourDismissed unchanged
+      return { ...state, introOpen: false };
+
     case "START_TOUR":
       return {
         ...state,
@@ -147,6 +172,8 @@ function reducer(state: HelpState, action: HelpAction): HelpState {
 
 type HelpContextValue = HelpState & {
   tourStep: (typeof TOUR_STEPS)[number] | null;
+  startTourFromIntro(): void;
+  jumpIn(): void;
   startTour(): void;
   advanceTour(): void;
   retreatTour(): void;
@@ -168,12 +195,12 @@ export function HelpProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, makeInitial);
   const autoStarted = useRef(false);
 
-  // Auto-start tour on first load if not permanently dismissed
+  // Show intro modal on first load if not permanently dismissed
   useEffect(() => {
     if (autoStarted.current) return;
     autoStarted.current = true;
     if (!state.tourDismissed) {
-      dispatch({ type: "START_TOUR" });
+      dispatch({ type: "OPEN_INTRO" });
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -185,6 +212,8 @@ export function HelpProvider({ children }: { children: ReactNode }) {
   const value: HelpContextValue = {
     ...state,
     tourStep: state.tourActive ? (TOUR_STEPS[state.tourStepIndex] ?? null) : null,
+    startTourFromIntro: () => dispatch({ type: "INTRO_START_TOUR" }),
+    jumpIn: () => dispatch({ type: "INTRO_JUMP_IN" }),
     startTour: () => dispatch({ type: "START_TOUR" }),
     advanceTour: () => dispatch({ type: "ADVANCE_TOUR" }),
     retreatTour: () => dispatch({ type: "RETREAT_TOUR" }),
