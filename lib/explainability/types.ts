@@ -6,6 +6,8 @@ export const PANEL_IDS = [
   "eventtape",
   "pnl",
   "orderbook",
+  "controls",
+  "help",
 ] as const;
 
 export type PanelId = (typeof PANEL_IDS)[number];

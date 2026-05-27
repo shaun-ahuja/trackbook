@@ -175,7 +175,7 @@ export default function TopBar({
           </button>
 
           {/* HELP entry point */}
-          <div ref={helpRef} className="relative">
+          <div ref={helpRef} data-tour-id="help" className="relative">
             <button
               onClick={() => setHelpOpen((v) => !v)}
               className={clsx(

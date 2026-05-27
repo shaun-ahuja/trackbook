@@ -2,6 +2,7 @@
 
 import { DEMO_SCENARIOS, type ScenarioName } from "@/lib/simulation/scenarios";
 import { SCENARIO_SUBTITLES } from "@/lib/explainability/explainabilityRegistry";
+import InfoIcon from "./help/InfoIcon";
 
 const SCENARIO_NAMES = Object.keys(DEMO_SCENARIOS) as ScenarioName[];
 
@@ -54,18 +55,23 @@ export default function ScenarioBar({ active, onApply }: Props) {
           <span className="truncate text-[9px] text-[#2a3850]">
             {DEMO_SCENARIOS[active].description}
           </span>
-          <button
-            onClick={() => onApply(null)}
-            className="ml-auto shrink-0 text-[9px] text-[#2a3850] transition-colors hover:text-[#4a6888]"
-          >
-            ✕
-          </button>
         </>
       ) : (
         <span className="ml-2 text-[8px] text-[#1e2d42]">
           inject scenario → optimizer responds immediately
         </span>
       )}
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        {active && (
+          <button
+            onClick={() => onApply(null)}
+            className="text-[9px] text-[#2a3850] transition-colors hover:text-[#4a6888]"
+          >
+            ✕
+          </button>
+        )}
+        <InfoIcon panelId="controls" />
+      </div>
     </div>
   );
 }

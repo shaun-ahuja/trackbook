@@ -81,20 +81,21 @@ export default function Terminal() {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#050709]">
-      <TopBar
-        tick={state.tick}
-        paused={state.paused}
-        dataSource={state.dataSource}
-        onTogglePause={togglePause}
-        onReseed={reseed}
-        onSetDataSource={setDataSource}
-        viewMode={viewMode}
-        focusLabel={focusLabel}
-        watchlistCount={watchlistIds.length}
-        onExitView={exitView}
-      />
-
-      <ScenarioBar active={activeScenario} onApply={applyScenario} />
+      <div data-tour-id="controls">
+        <TopBar
+          tick={state.tick}
+          paused={state.paused}
+          dataSource={state.dataSource}
+          onTogglePause={togglePause}
+          onReseed={reseed}
+          onSetDataSource={setDataSource}
+          viewMode={viewMode}
+          focusLabel={focusLabel}
+          watchlistCount={watchlistIds.length}
+          onExitView={exitView}
+        />
+        <ScenarioBar active={activeScenario} onApply={applyScenario} />
+      </div>
 
       <main
         className="grid min-h-0 flex-1 gap-1.5 p-1.5"

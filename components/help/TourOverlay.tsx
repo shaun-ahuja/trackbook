@@ -122,11 +122,10 @@ export default function TourOverlay() {
 
   return (
     <>
-      {/* Dark backdrop — captures pointer events to block sim interaction */}
+      {/* Dark backdrop — absorbs all pointer events to block sim interaction; does NOT dismiss */}
       <div
         className="overlay-enter fixed inset-0 z-[99]"
         style={{ background: "rgba(5,7,9,0.0)", pointerEvents: "all" }}
-        onClick={skipTour}
       />
 
       {/* Spotlight punch-out over target panel */}

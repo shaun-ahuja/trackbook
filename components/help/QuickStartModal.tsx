@@ -2,7 +2,10 @@
 
 import { useEffect, useRef } from "react";
 import { useHelp } from "@/contexts/HelpContext";
-import { QUICK_START_ITEMS } from "@/lib/explainability/explainabilityRegistry";
+import {
+  QUICK_START_ITEMS,
+  QUICK_START_INTERACT_ITEMS,
+} from "@/lib/explainability/explainabilityRegistry";
 
 export default function QuickStartModal() {
   const { quickStartOpen, closeQuickStart } = useHelp();
@@ -77,9 +80,23 @@ export default function QuickStartModal() {
           ))}
         </ol>
 
-        <div className="border-t border-[var(--color-panel-border)] px-4 py-2.5">
+        <div className="border-t border-[var(--color-panel-border)] px-4 py-3">
+          <div className="mb-1.5 text-[8px] font-bold uppercase tracking-[0.22em] text-[var(--color-muted)]">
+            How to interact
+          </div>
+          <ul className="space-y-1">
+            {QUICK_START_INTERACT_ITEMS.map((item, i) => (
+              <li key={i} className="flex items-start gap-2 text-[11px] text-[var(--color-muted)]">
+                <span className="mt-px text-[var(--color-accent)]/60">›</span>
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="border-t border-[var(--color-panel-border)] px-4 py-2">
           <p className="text-[9px] uppercase tracking-[0.16em] text-[var(--color-muted)]">
-            Use the guided tour for a full walkthrough · Hover ℹ on any panel for details
+            Use the guided tour for a full walkthrough · Click ℹ on any panel for details
           </p>
         </div>
       </div>

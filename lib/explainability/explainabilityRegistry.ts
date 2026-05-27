@@ -5,6 +5,12 @@ import type { GlossaryTerm, PanelId, PanelInfo, TourStep } from "./types";
 
 export const TOUR_STEPS: TourStep[] = [
   {
+    id: "step-markets",
+    panelId: "markets",
+    title: "Markets",
+    body: "Each row is a synthetic transit-linked contract with live pricing, forecast edge, and desk state. Choosing a market to inspect shows it's order book, forecast, and decision logic in detail.",
+  },
+  {
     id: "step-eventtape",
     panelId: "eventtape",
     title: "The Event Tape",
@@ -33,6 +39,24 @@ export const TOUR_STEPS: TourStep[] = [
     panelId: "pnl",
     title: "Book & P&L",
     body: "Positions build up from fills. Performance is marked to the current mid price each tick. Adverse selection is flagged when a fill is followed by a move against the desk.",
+  },
+  {
+    id: "step-datamode",
+    panelId: "controls",
+    title: "Data Mode",
+    body: "TransitAlpha runs in three modes. Synth is a fully simulated environment — all events are generated stochastically. Hybrid blends synthetic dynamics with live MTA signals. MTA follows live transit data directly.\n\nMode determines where market state comes from. Switch at any time; takes effect immediately.",
+  },
+  {
+    id: "step-scenarios",
+    panelId: "controls",
+    title: "Scenario Controls",
+    body: "Scenario injections stress-test the market maker under specific conditions. Calm resets to stable low-volatility conditions. Shock introduces high-severity disruption risk. Inventory Stress forces the desk into constrained inventory management.\n\nPause freezes the simulation. Reseed restarts it with a fresh stochastic path.",
+  },
+  {
+    id: "step-help",
+    panelId: "help",
+    title: "Help & Resources",
+    body: "All explainability tools live here. Quick Start gives a 20-second overview of the simulation loop. Restart Tour replays this walkthrough at any time. Glossary opens a searchable reference of every term used in the interface.\n\nThat's the tour. Use HELP whenever you need a refresher.",
   },
 ];
 
@@ -94,6 +118,22 @@ export const PANEL_INFO: Record<PanelId, PanelInfo> = {
     why: "Events are the primary driver of probability shifts. Severity and source type determine shock size and how long the effect persists.",
     howUpdates: "New events prepend to the top and flash on arrival. In focus or watchlist view, the tape filters to events affecting active markets.",
     howInterpret: "Severity-3 red events trigger network contagion across related lines. Planned events build latent risk slowly over many ticks rather than spiking.",
+  },
+  controls: {
+    panelId: "controls",
+    title: "Simulation Controls",
+    what: "Data mode selector (Synth / Hybrid / MTA), scenario injections (Calm / Shock / Inventory Stress), and execution controls (Pause / Reseed).",
+    why: "Controls let you explore different operating conditions and observe how the desk responds. Scenarios reproduce specific stress conditions with a fixed random seed for reproducibility.",
+    howUpdates: "Mode changes take effect immediately. Scenario injections fire the optimizer and pause the simulation to show the initial response before the simulation resumes.",
+    howInterpret: "Synth is best for isolated demonstrations. Hybrid and MTA connect to live transit signals. Use scenarios to see CVaR constraints bind, inventory limits stress, or edge-capture under calm conditions.",
+  },
+  help: {
+    panelId: "help",
+    title: "Help & Resources",
+    what: "Entry point for all explainability tools: Quick Start overview, guided tour walkthrough, and 31-term glossary.",
+    why: "All reference material is accessible from one place at any point during the session.",
+    howUpdates: "Static — available whenever you need it.",
+    howInterpret: "Quick Start for a fast overview. Restart Tour for a step-by-step walkthrough of every panel. Glossary for definitions of any term shown in the interface.",
   },
 };
 
@@ -302,11 +342,18 @@ export const GLOSSARY_TERMS: GlossaryTerm[] = [
 // ── Quick Start ────────────────────────────────────────────────────────────
 
 export const QUICK_START_ITEMS = [
-  "Events shift disruption probabilities",
-  "Forecast estimates the desk's fair value",
-  "Synthetic traders generate order flow",
-  "The desk manages quotes and inventory risk",
-  "P&L reflects execution quality and risk management",
+  "Markets: each row is a tradable transit contract — select one to drill into its forecast, order book, and decision logic",
+  "Events shift disruption probabilities; the model estimates fair value each tick",
+  "Synthetic traders generate order flow against the desk's resting quotes",
+  "The Decision Engine picks the optimal action using CVaR-constrained rollout optimization",
+  "P&L marks positions to mid price; adverse selection is flagged on bad fills",
+] as const;
+
+export const QUICK_START_INTERACT_ITEMS = [
+  "Synth / Hybrid / MTA — choose your data source (src selector, top left)",
+  "Calm / Shock / Inventory Stress — inject scenarios to stress-test the desk",
+  "Pause or Reseed to control simulation state",
+  "HELP → Quick Start, Restart Tour, Glossary (top right)",
 ] as const;
 
 // ── Scenario subtitles ─────────────────────────────────────────────────────
