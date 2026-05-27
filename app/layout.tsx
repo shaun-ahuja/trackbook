@@ -11,6 +11,7 @@ export const metadata: Metadata = {
   title: "TransitAlpha · NYC Transit Markets",
   description:
     "AI-driven market making desk for synthetic NYC subway delay contracts.",
+  icons: [],
 };
 
 export default function RootLayout({
