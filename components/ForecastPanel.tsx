@@ -3,6 +3,9 @@
 import { memo } from "react";
 import clsx from "clsx";
 import Panel from "./Panel";
+import InfoIcon from "./help/InfoIcon";
+import GlossaryTrigger from "./help/GlossaryTrigger";
+import PanelStatusBadge from "./help/PanelStatusBadge";
 import type { DriverContribution, Market, MarketRegime } from "@/lib/types";
 import { signed } from "@/lib/format";
 
@@ -43,32 +46,47 @@ function ForecastPanel({ market, now }: Props) {
   const regimeStyle = REGIME_STYLES[regime];
   const drivers = dyn?.lastDrivers ?? [];
   const volEst = dyn?.volatilityEstimate ?? 0;
-  // Render vol on a 0..1 scale capped at vol=0.05 (saturation point).
   const volPct = Math.min(1, volEst / 0.05);
+
+  // Status badges
+  const regimeBadge =
+    regime !== "calm"
+      ? {
+          label: regime.toUpperCase(),
+          tone: regime === "shock" ? "down" : regime === "alert" ? "warn" : "accent",
+        } as const
+      : null;
+  const confBadge =
+    conf < 0.40 ? { label: "LOW CONF", tone: "warn" as const } : null;
 
   return (
     <Panel
       title="AI Forecast"
       subtitle="transit-v1 · posterior"
       right={
-        <span
-          className={clsx(
-            "tab-num",
-            Math.abs(delta) > 0.005
-              ? delta > 0
-                ? "text-[var(--color-up)]"
-                : "text-[var(--color-down)]"
-              : "text-[var(--color-muted)]",
-          )}
-        >
-          Δtick {signed(delta * 100, 2)} pp
-        </span>
+        <div className="flex items-center gap-1.5">
+          {regimeBadge && <PanelStatusBadge label={regimeBadge.label} tone={regimeBadge.tone} />}
+          {confBadge && <PanelStatusBadge label={confBadge.label} tone={confBadge.tone} />}
+          <span
+            className={clsx(
+              "tab-num",
+              Math.abs(delta) > 0.005
+                ? delta > 0
+                  ? "text-[var(--color-up)]"
+                  : "text-[var(--color-down)]"
+                : "text-[var(--color-muted)]",
+            )}
+          >
+            Δtick {signed(delta * 100, 2)} pp
+          </span>
+          <InfoIcon panelId="forecast" />
+        </div>
       }
     >
       <div className={clsx("rounded-[2px]", flash && "row-flash")}>
         <div className="flex items-end justify-between">
           <span className="text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)]">
-            P(contract resolves YES)
+            <GlossaryTrigger term="fair-value">P(contract resolves YES)</GlossaryTrigger>
           </span>
           <span className="tab-num text-[28px] leading-none text-[var(--color-accent)]">
             {(prob * 100).toFixed(1)}%
@@ -96,7 +114,7 @@ function ForecastPanel({ market, now }: Props) {
       <div className="mt-3">
         <div className="flex items-baseline justify-between">
           <span className="text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)]">
-            model confidence
+            <GlossaryTrigger term="confidence">model confidence</GlossaryTrigger>
           </span>
           <span className="tab-num text-[12px] text-[var(--color-foreground)]">
             {(conf * 100).toFixed(0)}%
@@ -108,7 +126,7 @@ function ForecastPanel({ market, now }: Props) {
       <div className="mt-3 border-t border-[var(--color-panel-border)] pt-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)]">
-            market instability
+            <GlossaryTrigger term="volatility-regime">market instability</GlossaryTrigger>
           </span>
           <span
             className="rounded-[1px] px-1.5 py-0.5 text-[9px] font-bold tracking-[0.18em]"
@@ -141,10 +159,11 @@ function ForecastPanel({ market, now }: Props) {
         </div>
       </div>
 
-      <div className="mt-3 border-t border-[var(--color-panel-border)] pt-2">
-        <span className="text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)]">
-          top drivers
-        </span>
+      {/* Tier-3: probability driver breakdown — collapsed by default */}
+      <details className="mt-3 border-t border-[var(--color-panel-border)] pt-2">
+        <summary className="cursor-pointer list-none text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)] hover:text-[var(--color-foreground)]">
+          probability drivers ▸
+        </summary>
         {drivers.length === 0 ? (
           <p className="mt-1 text-[11px] text-[var(--color-muted)]">
             no drivers yet — warming up
@@ -179,7 +198,7 @@ function ForecastPanel({ market, now }: Props) {
             ))}
           </ul>
         )}
-      </div>
+      </details>
     </Panel>
   );
 }

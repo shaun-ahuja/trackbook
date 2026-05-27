@@ -1,6 +1,7 @@
 "use client";
 
 import { DEMO_SCENARIOS, type ScenarioName } from "@/lib/simulation/scenarios";
+import { SCENARIO_SUBTITLES } from "@/lib/explainability/explainabilityRegistry";
 
 const SCENARIO_NAMES = Object.keys(DEMO_SCENARIOS) as ScenarioName[];
 
@@ -20,18 +21,29 @@ export default function ScenarioBar({ active, onApply }: Props) {
         {SCENARIO_NAMES.map((name) => {
           const s = DEMO_SCENARIOS[name];
           const isActive = active === name;
+          const sub = SCENARIO_SUBTITLES[name];
           return (
             <button
               key={name}
               onClick={() => onApply(isActive ? null : name)}
-              className="rounded-[2px] border px-2 py-0.5 text-[9px] font-bold tracking-[0.14em] transition-all duration-100"
+              className="flex flex-col items-start rounded-[2px] border px-2 py-0.5 transition-all duration-100"
               style={{
                 borderColor: isActive ? s.color : "#1e2d42",
                 color: isActive ? s.color : "#3a4f68",
                 background: isActive ? `${s.color}14` : "transparent",
               }}
             >
-              {s.label}
+              <span className="text-[9px] font-bold tracking-[0.14em]">
+                {s.label}
+              </span>
+              {sub && (
+                <span
+                  className="text-[7px] tracking-[0.10em] opacity-70"
+                  style={{ color: isActive ? s.color : "#2a3850" }}
+                >
+                  {sub}
+                </span>
+              )}
             </button>
           );
         })}

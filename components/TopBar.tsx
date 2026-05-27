@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import clsx from "clsx";
 import { clockHHMMSS } from "@/lib/format";
 import type { DataSourceMode } from "@/lib/types";
 import type { ViewMode } from "@/lib/view";
+import { useHelp } from "@/contexts/HelpContext";
 
 type Props = {
   tick: number;
@@ -39,12 +40,27 @@ export default function TopBar({
   watchlistCount,
   onExitView,
 }: Props) {
-  // Local clock: only TopBar re-renders for time display, not the whole tree.
   const [now, setNow] = useState(Date.now);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const helpRef = useRef<HTMLDivElement>(null);
+  const { startTour, openGlossary, openQuickStart } = useHelp();
+
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(id);
   }, []);
+
+  // Close HELP dropdown on outside click
+  useEffect(() => {
+    if (!helpOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (helpRef.current && !helpRef.current.contains(e.target as Node)) {
+        setHelpOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [helpOpen]);
 
   const viewChip =
     viewMode === "desk"
@@ -58,6 +74,7 @@ export default function TopBar({
       : viewMode === "focus"
         ? "text-[var(--color-accent)]"
         : "text-[var(--color-warn)]";
+
   return (
     <header className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-panel-border)] bg-[#080b10] px-3">
       <div className="flex items-center gap-3">
@@ -144,19 +161,87 @@ export default function TopBar({
         <div className="flex items-center gap-1">
           <button
             onClick={onTogglePause}
+            title={paused ? "Resume simulation" : "Pause simulation"}
             className="rounded-[1px] border border-[var(--color-panel-border)] bg-[var(--color-panel)] px-2 py-0.5 text-[9px] uppercase tracking-[0.22em] text-[var(--color-foreground)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
           >
             {paused ? "Resume" : "Pause"}
           </button>
           <button
             onClick={onReseed}
+            title="Reseed RNG and restart simulation"
             className="rounded-[1px] border border-[var(--color-panel-border)] bg-[var(--color-panel)] px-2 py-0.5 text-[9px] uppercase tracking-[0.22em] text-[var(--color-foreground)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
           >
             Reseed
           </button>
+
+          {/* HELP entry point */}
+          <div ref={helpRef} className="relative">
+            <button
+              onClick={() => setHelpOpen((v) => !v)}
+              className={clsx(
+                "rounded-[1px] border px-2 py-0.5 text-[9px] uppercase tracking-[0.22em]",
+                helpOpen
+                  ? "border-[var(--color-accent)]/40 bg-[rgba(88,228,197,0.06)] text-[var(--color-accent)]"
+                  : "border-[var(--color-panel-border)] bg-[var(--color-panel)] text-[var(--color-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]",
+              )}
+            >
+              Help ▾
+            </button>
+
+            {helpOpen && (
+              <div className="popover-enter absolute right-0 top-full z-[103] mt-1 w-[160px] overflow-hidden rounded-[2px] border border-[var(--color-panel-border)] bg-[#060b10] shadow-lg">
+                <HelpMenuItem
+                  onClick={() => {
+                    setHelpOpen(false);
+                    openQuickStart();
+                  }}
+                  label="Quick Start"
+                  sub="20-second overview"
+                />
+                <HelpMenuItem
+                  onClick={() => {
+                    setHelpOpen(false);
+                    startTour();
+                  }}
+                  label="Restart Tour"
+                  sub="step-by-step walkthrough"
+                />
+                <HelpMenuItem
+                  onClick={() => {
+                    setHelpOpen(false);
+                    openGlossary();
+                  }}
+                  label="Glossary"
+                  sub="31 terms explained"
+                />
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </header>
+  );
+}
+
+function HelpMenuItem({
+  onClick,
+  label,
+  sub,
+}: {
+  onClick: () => void;
+  label: string;
+  sub: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full border-b border-[var(--color-panel-border)] px-3 py-2 text-left last:border-0 hover:bg-[rgba(88,228,197,0.04)]"
+    >
+      <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-foreground)]">
+        {label}
+      </div>
+      <div className="text-[9px] text-[var(--color-muted)]">{sub}</div>
+    </button>
   );
 }
 

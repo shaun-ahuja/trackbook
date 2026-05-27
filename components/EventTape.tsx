@@ -2,6 +2,7 @@
 
 import clsx from "clsx";
 import Panel from "./Panel";
+import InfoIcon from "./help/InfoIcon";
 import type { Market, TransitEvent } from "@/lib/types";
 import { clockHHMMSS } from "@/lib/format";
 
@@ -50,6 +51,7 @@ export default function EventTape({ events, markets, scopeLabel }: Props) {
       title="Event Tape"
       subtitle={subtitle}
       bodyClassName="p-0"
+      right={<InfoIcon panelId="eventtape" />}
     >
       {events.length === 0 ? (
         <div className="px-3 py-4 text-[11px] text-[var(--color-muted)]">

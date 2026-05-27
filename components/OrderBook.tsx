@@ -2,6 +2,8 @@
 
 import clsx from "clsx";
 import Panel from "./Panel";
+import InfoIcon from "./help/InfoIcon";
+import GlossaryTrigger from "./help/GlossaryTrigger";
 import type { BookLevel, Market } from "@/lib/types";
 
 type Props = { market: Market };
@@ -16,18 +18,21 @@ export default function OrderBook({ market }: Props) {
     ...bids.map((l) => l.size),
   );
 
-  // Display asks descending so the inside is closest to the mid bar.
   const asksDesc = [...asks].reverse();
 
   return (
-    <Panel title="Order Book" subtitle="synth · L2">
+    <Panel
+      title="Order Book"
+      subtitle="synth · L2"
+      right={<InfoIcon panelId="orderbook" />}
+    >
       <div className="grid grid-cols-[1fr_56px_44px] gap-x-2 text-[10px]">
         {asksDesc.map((l) => (
           <Row key={`a${l.price}`} side="ask" level={l} ratio={l.size / maxSize} />
         ))}
 
         <div className="col-span-3 my-1 flex items-center justify-between border-y border-dashed border-[var(--color-panel-border)] py-0.5 text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)]">
-          <span>mid</span>
+          <GlossaryTrigger term="mid-price">mid</GlossaryTrigger>
           <span className="tab-num text-[10px] text-[var(--color-accent)]">
             {mid.toFixed(2)}¢
           </span>
@@ -41,13 +46,13 @@ export default function OrderBook({ market }: Props) {
       <div className="mt-2 flex items-center justify-between border-t border-[var(--color-panel-border)] pt-1 text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)]">
         <span>our quote</span>
         <span className="tab-num text-[10px]">
-          <span className="text-[var(--color-up)]">
-            {market.ourBid.toFixed(1)}
-          </span>
+          <GlossaryTrigger term="bid">
+            <span className="text-[var(--color-up)]">{market.ourBid.toFixed(1)}</span>
+          </GlossaryTrigger>
           {" / "}
-          <span className="text-[var(--color-down)]">
-            {market.ourAsk.toFixed(1)}
-          </span>
+          <GlossaryTrigger term="ask">
+            <span className="text-[var(--color-down)]">{market.ourAsk.toFixed(1)}</span>
+          </GlossaryTrigger>
         </span>
       </div>
     </Panel>

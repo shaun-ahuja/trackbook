@@ -43,3 +43,51 @@ html, body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #1a2230; border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: #25303f; }
+
+/* ── Glossary trigger underline ────────────────────────────────────────── */
+.glossary-trigger {
+  border-bottom: 1px dotted var(--color-muted);
+  cursor: default;
+}
+.glossary-trigger:hover {
+  border-bottom-color: var(--color-foreground);
+}
+
+/* ── Glossary drawer slide ─────────────────────────────────────────────── */
+@keyframes drawer-in {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes drawer-out {
+  from { transform: translateX(0); }
+  to   { transform: translateX(100%); }
+}
+.drawer-enter { animation: drawer-in  180ms ease-out forwards; }
+.drawer-exit  { animation: drawer-out 160ms ease-in  forwards; }
+
+/* ── Tour step card entrance ───────────────────────────────────────────── */
+@keyframes tour-card-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.tour-card-enter { animation: tour-card-in 150ms ease-out forwards; }
+
+/* ── Tour spotlight smooth repositioning ──────────────────────────────── */
+.tour-spotlight {
+  transition: top 200ms ease-out, left 200ms ease-out,
+              width 200ms ease-out, height 200ms ease-out;
+}
+
+/* ── Overlay fade-in ───────────────────────────────────────────────────── */
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.overlay-enter { animation: overlay-in 120ms ease-out forwards; }
+
+/* ── Quick start / info card entrance ─────────────────────────────────── */
+@keyframes popover-in {
+  from { opacity: 0; transform: scale(0.97) translateY(-4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.popover-enter { animation: popover-in 140ms ease-out forwards; }

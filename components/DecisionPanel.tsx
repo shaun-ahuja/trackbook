@@ -1,8 +1,10 @@
 "use client";
 
-import { memo } from "react";
+import { memo, type ReactNode } from "react";
 import clsx from "clsx";
 import Panel from "./Panel";
+import InfoIcon from "./help/InfoIcon";
+import GlossaryTrigger from "./help/GlossaryTrigger";
 import {
   INVENTORY_LIMIT,
   type Fill,
@@ -105,6 +107,7 @@ function DecisionPanel({ market, fills, tick, optimizerDecision }: Props) {
           >
             {posture.label}
           </span>
+          <InfoIcon panelId="decision" />
         </div>
       }
     >
@@ -147,12 +150,16 @@ function DecisionPanel({ market, fills, tick, optimizerDecision }: Props) {
             tone={edge > 0.1 ? "up" : edge < -0.1 ? "down" : "muted"}
           />
           <KV
-            label="confidence"
+            label={<GlossaryTrigger term="confidence">confidence</GlossaryTrigger>}
             value={`${(market.confidence * 100).toFixed(0)}%`}
             tone={market.confidence < 0.46 ? "warn" : "default"}
           />
           <KV
-            label={`inventory (limit ±${INVENTORY_LIMIT})`}
+            label={
+              <GlossaryTrigger term="inventory-limits">
+                inventory (limit ±{INVENTORY_LIMIT})
+              </GlossaryTrigger>
+            }
             value={`${signed(market.inventory, 0)}`}
             tone={
               Math.abs(market.inventory) >= INVENTORY_LIMIT - 1
@@ -251,13 +258,15 @@ function OptimizerSection({ decision, tick }: { decision: OptimizerDecision; tic
   return (
     <section className="mt-3">
       <div className="flex items-center justify-between">
-        <SectionLabel>julia / jump optimizer</SectionLabel>
+        <SectionLabel>
+          <GlossaryTrigger term="jump-optimizer">julia / jump optimizer</GlossaryTrigger>
+        </SectionLabel>
         <span className="text-[9px] uppercase tracking-[0.18em] text-[var(--color-muted)]">
           {staleTicks > 0 ? `${staleTicks}t ago` : "live"}
         </span>
       </div>
 
-      {/* Selected action badge — raw Julia output */}
+      {/* Selected action badge */}
       <div className="mt-1 flex items-center gap-1.5">
         <span className="text-[9px] uppercase tracking-[0.16em] text-[var(--color-muted)]">
           Julia rec
@@ -273,68 +282,80 @@ function OptimizerSection({ decision, tick }: { decision: OptimizerDecision; tic
         </span>
       </div>
 
-      {/* Trajectory stats */}
+      {/* Trajectory stats — always visible (Tier 1/2) */}
       {selectedStats ? (
         <div className="mt-1.5 grid grid-cols-3 gap-1 text-[10px]">
-          <StatBubble label="μ return" value={selectedStats.meanReturn.toFixed(2)} />
           <StatBubble
-            label="CVaR 10%"
+            label={<GlossaryTrigger term="expected-return">μ return</GlossaryTrigger>}
+            value={selectedStats.meanReturn.toFixed(2)}
+          />
+          <StatBubble
+            label={<GlossaryTrigger term="cvar">CVaR 10%</GlossaryTrigger>}
             value={(-selectedStats.cvarReturn).toFixed(2)}
             tone={selectedStats.cvarReturn > 2 ? "warn" : "default"}
           />
           <StatBubble
-            label="fill prob"
+            label={<GlossaryTrigger term="fill-probability">fill prob</GlossaryTrigger>}
             value={`${(selectedStats.fillProbability * 100).toFixed(0)}%`}
           />
         </div>
       ) : null}
 
-      {/* Mixing distribution top-3 */}
-      {top3.length > 1 ? (
-        <div className="mt-1.5 space-y-0.5">
-          {top3.map((p) => (
-            <div key={p.planIndex} className="flex items-center gap-1.5 text-[10px]">
-              <div
-                className="h-1 rounded-[1px] bg-[#5fd7e7]"
-                style={{ width: `${Math.max(4, p.weight * 80)}px` }}
-              />
-              <span className="text-[var(--color-muted)]">
-                {(p.weight * 100).toFixed(0)}%
-              </span>
-              <span className="text-[var(--color-foreground)]">
-                {p.firstAction}
-              </span>
-              <span className="text-[var(--color-muted)]">{p.policyName}</span>
+      {/* Tier-3 diagnostics — collapsed by default */}
+      {(top3.length > 1 || decision.bindingConstraints.filter(b => b.name !== "plan_mixture").length > 0 || decision.explanation) && (
+        <details className="mt-2">
+          <summary className="cursor-pointer list-none text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)] hover:text-[var(--color-foreground)]">
+            diagnostics ▸
+          </summary>
+
+          {/* Mixing distribution */}
+          {top3.length > 1 && (
+            <div className="mt-1.5 space-y-0.5">
+              {top3.map((p) => (
+                <div key={p.planIndex} className="flex items-center gap-1.5 text-[10px]">
+                  <div
+                    className="h-1 rounded-[1px] bg-[#5fd7e7]"
+                    style={{ width: `${Math.max(4, p.weight * 80)}px` }}
+                  />
+                  <span className="text-[var(--color-muted)]">
+                    {(p.weight * 100).toFixed(0)}%
+                  </span>
+                  <span className="text-[var(--color-foreground)]">
+                    {p.firstAction}
+                  </span>
+                  <span className="text-[var(--color-muted)]">{p.policyName}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      ) : null}
+          )}
 
-      {/* Binding constraints */}
-      {decision.bindingConstraints.filter(b => b.name !== "plan_mixture").length > 0 ? (
-        <div className="mt-1.5 flex flex-wrap gap-1">
-          {decision.bindingConstraints
-            .filter((b) => b.name !== "plan_mixture")
-            .map((b) => (
-              <span
-                key={b.name}
-                className="rounded-[1px] bg-[#221e0d] px-1 py-0.5 text-[9px] tracking-[0.14em] text-[var(--color-warn)]"
-                title={b.interpretation}
-              >
-                {b.name}
-              </span>
-            ))}
-        </div>
-      ) : null}
+          {/* Binding constraints */}
+          {decision.bindingConstraints.filter(b => b.name !== "plan_mixture").length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {decision.bindingConstraints
+                .filter((b) => b.name !== "plan_mixture")
+                .map((b) => (
+                  <span
+                    key={b.name}
+                    className="rounded-[1px] bg-[#221e0d] px-1 py-0.5 text-[9px] tracking-[0.14em] text-[var(--color-warn)]"
+                    title={b.interpretation}
+                  >
+                    {b.name}
+                  </span>
+                ))}
+            </div>
+          )}
 
-      {/* Explanation text from Julia */}
-      {decision.explanation ? (
-        <div className="mt-2 rounded-[2px] border border-[var(--color-panel-border)] bg-[#060a0f] px-2 py-1.5">
-          <pre className="whitespace-pre-wrap font-mono text-[9px] leading-[1.65] text-[var(--color-muted)]">
-            {decision.explanation}
-          </pre>
-        </div>
-      ) : null}
+          {/* Explanation text */}
+          {decision.explanation && (
+            <div className="mt-2 rounded-[2px] border border-[var(--color-panel-border)] bg-[#060a0f] px-2 py-1.5">
+              <pre className="whitespace-pre-wrap font-mono text-[9px] leading-[1.65] text-[var(--color-muted)]">
+                {decision.explanation}
+              </pre>
+            </div>
+          )}
+        </details>
+      )}
     </section>
   );
 }
@@ -344,7 +365,7 @@ function StatBubble({
   value,
   tone = "default",
 }: {
-  label: string;
+  label: ReactNode;
   value: string;
   tone?: "default" | "warn";
 }) {
@@ -363,7 +384,7 @@ function StatBubble({
   );
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
+function SectionLabel({ children }: { children: ReactNode }) {
   return (
     <div className="text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)]">
       {children}
@@ -376,7 +397,7 @@ function KV({
   value,
   tone = "default",
 }: {
-  label: string;
+  label: ReactNode;
   value: string;
   tone?: "default" | "accent" | "up" | "down" | "muted" | "warn";
 }) {

@@ -1,7 +1,11 @@
 "use client";
 
+import type { ReactNode } from "react";
 import clsx from "clsx";
 import Panel from "./Panel";
+import InfoIcon from "./help/InfoIcon";
+import GlossaryTrigger from "./help/GlossaryTrigger";
+import PanelStatusBadge from "./help/PanelStatusBadge";
 import type { Market, SimState } from "@/lib/types";
 import { signed, signedDollars } from "@/lib/format";
 import { totalInventoryNotional, totalPnl } from "@/lib/simulation/pnl";
@@ -18,22 +22,38 @@ export default function PnLPanel({ state, positionMarkets, scopeLabel }: Props) 
   const markets: Market[] =
     positionMarkets ?? state.marketOrder.map((id) => state.markets[id]);
 
+  // Adverse selection badge: count markets with recent adverse fills
+  const adverseCount = markets.filter(
+    (m) => m.inventory !== 0 && m.realizedPnl + m.unrealizedPnl < -50,
+  ).length;
+
   return (
-    <Panel title="Book · PnL" subtitle={scopeLabel ?? "paper"}>
+    <Panel
+      title="Book · PnL"
+      subtitle={scopeLabel ?? "paper"}
+      right={
+        <div className="flex items-center gap-1">
+          {adverseCount > 0 && (
+            <PanelStatusBadge label={`ADV SEL · ${adverseCount}`} tone="warn" />
+          )}
+          <InfoIcon panelId="pnl" />
+        </div>
+      }
+    >
       <div className="grid grid-cols-2 gap-1.5">
         <Stat
-          label="total pnl"
+          label={<GlossaryTrigger term="pnl">total pnl</GlossaryTrigger>}
           value={signedDollars(pnl.total)}
           tone={tone(pnl.total)}
           big
         />
         <Stat
-          label="unrealized"
+          label={<GlossaryTrigger term="unrealized-pnl">unrealized</GlossaryTrigger>}
           value={signedDollars(pnl.unrealized)}
           tone={tone(pnl.unrealized)}
         />
         <Stat
-          label="realized"
+          label={<GlossaryTrigger term="realized-pnl">realized</GlossaryTrigger>}
           value={signedDollars(pnl.realized)}
           tone={tone(pnl.realized)}
         />
@@ -95,7 +115,7 @@ function Stat({
   tone,
   big,
 }: {
-  label: string;
+  label: ReactNode;
   value: string;
   tone: string;
   big?: boolean;

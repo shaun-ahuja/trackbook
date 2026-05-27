@@ -13,6 +13,7 @@ import ScenarioBar from "./ScenarioBar";
 import { useTrackBookSimulation } from "@/hooks/useTrackBookSimulation";
 import { useTerminalView } from "@/hooks/useTerminalView";
 import { visibleEvents, visiblePositionMarkets } from "@/lib/view";
+import { useHelp } from "@/contexts/HelpContext";
 
 export default function Terminal() {
   const {
@@ -42,13 +43,19 @@ export default function Terminal() {
     onSelectMarket: selectMarket,
   });
 
+  const { tourActive } = useHelp();
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") exitView();
+      if (e.key === "Escape") {
+        // TourOverlay owns Escape when tour is active
+        if (tourActive) return;
+        exitView();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [exitView]);
+  }, [exitView, tourActive]);
 
   const filteredEvents = useMemo(
     () => visibleEvents(state.events, viewMode, activeIds),
@@ -101,7 +108,7 @@ export default function Terminal() {
           `,
         }}
       >
-        <div style={{ gridArea: "markets" }} className="min-h-0">
+        <div data-tour-id="markets" style={{ gridArea: "markets" }} className="min-h-0">
           <MarketsList
             markets={marketsArr}
             selectedId={state.selectedMarketId}
@@ -112,30 +119,30 @@ export default function Terminal() {
             watchlistIds={watchlistIds}
           />
         </div>
-        <div style={{ gridArea: "detail" }} className="min-h-0">
+        <div data-tour-id="detail" style={{ gridArea: "detail" }} className="min-h-0">
           <MarketDetail market={selected} now={state.now} />
         </div>
-        <div style={{ gridArea: "decision" }} className="min-h-0">
+        <div data-tour-id="decision" style={{ gridArea: "decision" }} className="min-h-0">
           <DecisionPanel market={selected} fills={state.fills} tick={state.tick} optimizerDecision={optimizerDecision} />
         </div>
-        <div style={{ gridArea: "forecast" }} className="min-h-0">
+        <div data-tour-id="forecast" style={{ gridArea: "forecast" }} className="min-h-0">
           <ForecastPanel market={selected} now={state.now} />
         </div>
-        <div style={{ gridArea: "eventtape" }} className="min-h-0">
+        <div data-tour-id="eventtape" style={{ gridArea: "eventtape" }} className="min-h-0">
           <EventTape
             events={filteredEvents}
             markets={state.markets}
             scopeLabel={tapeScope}
           />
         </div>
-        <div style={{ gridArea: "pnl" }} className="min-h-0">
+        <div data-tour-id="pnl" style={{ gridArea: "pnl" }} className="min-h-0">
           <PnLPanel
             state={state}
             positionMarkets={positionMarkets}
             scopeLabel={pnlScope}
           />
         </div>
-        <div style={{ gridArea: "orderbook" }} className="min-h-0">
+        <div data-tour-id="orderbook" style={{ gridArea: "orderbook" }} className="min-h-0">
           <OrderBook market={selected} />
         </div>
       </main>

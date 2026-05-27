@@ -4,6 +4,7 @@ import { memo } from "react";
 import clsx from "clsx";
 import Panel from "./Panel";
 import Sparkline from "./Sparkline";
+import InfoIcon from "./help/InfoIcon";
 import type { FlowEvent, Market, TraderArchetype } from "@/lib/types";
 import { signed } from "@/lib/format";
 
@@ -23,10 +24,6 @@ const ARCHETYPE_NAME: Record<TraderArchetype, string> = {
 
 const FLOW_LOG_VISIBLE = 6;
 
-// Build the action phrase shown after "<Type> investor". Limit orders are
-// always "adding liquidity"; market orders specialise per archetype so
-// the commentary reads like a tape narrator (informed buys "disruption
-// risk", desk "lifts the offer", panic "panic-sells", etc.).
 function actionPhrase(
   archetype: TraderArchetype,
   side: FlowEvent["side"],
@@ -89,7 +86,10 @@ function MarketDetail({ market, now }: Props) {
       title="Market Detail"
       subtitle={market.id}
       right={
-        <span className="uppercase tracking-[0.18em]">expires {market.expiry}</span>
+        <div className="flex items-center gap-1">
+          <span className="uppercase tracking-[0.18em]">expires {market.expiry}</span>
+          <InfoIcon panelId="detail" />
+        </div>
       }
     >
       <header className="flex items-center justify-between gap-3">
@@ -147,37 +147,42 @@ function MarketDetail({ market, now }: Props) {
       </div>
       <Sparkline values={market.priceHistory} height={80} className="mt-1 w-full" />
 
-      <div className="mt-3 flex items-center justify-between text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)]">
-        <span>flow · last {FLOW_LOG_VISIBLE}</span>
-        <span className="tab-num">depth ewma {market.lpDepth?.toFixed(1) ?? "—"}</span>
-      </div>
-      {market.flowLog && market.flowLog.length > 0 ? (
-        <ul className="mt-1 space-y-0.5">
-          {market.flowLog.slice(0, FLOW_LOG_VISIBLE).map((e, idx) => (
-            <li
-              key={`${e.tick}-${idx}-${e.archetype}-${e.side}`}
-              className="text-[11px] leading-[1.4]"
-            >
-              <span
-                className="font-semibold text-[var(--color-foreground)]"
-                style={{ color: flowSideColor(e.side) }}
+      {/* Tier-3: flow log — collapsed by default */}
+      <details className="mt-3">
+        <summary className="cursor-pointer list-none text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)] hover:text-[var(--color-foreground)]">
+          flow · last {FLOW_LOG_VISIBLE} ▸
+          <span className="ml-2 tab-num text-[9px]">
+            depth ewma {market.lpDepth?.toFixed(1) ?? "—"}
+          </span>
+        </summary>
+        {market.flowLog && market.flowLog.length > 0 ? (
+          <ul className="mt-1 space-y-0.5">
+            {market.flowLog.slice(0, FLOW_LOG_VISIBLE).map((e, idx) => (
+              <li
+                key={`${e.tick}-${idx}-${e.archetype}-${e.side}`}
+                className="text-[11px] leading-[1.4]"
               >
-                {ARCHETYPE_NAME[e.archetype]}
-              </span>
-              <span className="text-[var(--color-foreground)]">
-                {" "}investor {actionPhrase(e.archetype, e.side)}
-              </span>
-              <span className="tab-num text-[var(--color-muted)]">
-                {" "}· ×{e.qty} @ {e.priceCents.toFixed(1)}¢
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="mt-1 text-[11px] text-[var(--color-muted)]">
-          no archetype activity yet
-        </p>
-      )}
+                <span
+                  className="font-semibold text-[var(--color-foreground)]"
+                  style={{ color: flowSideColor(e.side) }}
+                >
+                  {ARCHETYPE_NAME[e.archetype]}
+                </span>
+                <span className="text-[var(--color-foreground)]">
+                  {" "}investor {actionPhrase(e.archetype, e.side)}
+                </span>
+                <span className="tab-num text-[var(--color-muted)]">
+                  {" "}· ×{e.qty} @ {e.priceCents.toFixed(1)}¢
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1 text-[11px] text-[var(--color-muted)]">
+            no archetype activity yet
+          </p>
+        )}
+      </details>
     </Panel>
   );
 }
