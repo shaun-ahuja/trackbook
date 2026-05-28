@@ -1,4 +1,4 @@
-FROM julia:1.11
+FROM julia:1.10
 
 WORKDIR /app
 
