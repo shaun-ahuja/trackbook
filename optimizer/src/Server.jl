@@ -75,8 +75,9 @@ function main()
         @warn "JIT warmup failed (non-fatal)" exception = e
     end
 
-    @info "TrackBook optimizer listening on port $PORT"
-    HTTP.serve(router, "127.0.0.1", PORT)
+    HOST = get(ENV, "JULIA_HOST", "127.0.0.1")
+    @info "TrackBook optimizer listening on port $PORT host=$HOST"
+    HTTP.serve(router, HOST, PORT)
 end
 
 main()

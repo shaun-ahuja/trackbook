@@ -2,7 +2,9 @@
 // Julia optimizer on port 2024 and relays the response unchanged.
 export const dynamic = "force-dynamic";
 
-const JULIA_URL = "http://127.0.0.1:2024/optimize";
+const JULIA_URL = process.env.OPTIMIZER_URL
+  ? `${process.env.OPTIMIZER_URL}/optimize`
+  : "http://127.0.0.1:2024/optimize";
 
 export async function POST(request: Request): Promise<Response> {
   const t0 = Date.now();

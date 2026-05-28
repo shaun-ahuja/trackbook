@@ -1,6 +1,8 @@
 export const dynamic = "force-dynamic";
 
-const JULIA_HEALTH_URL = "http://127.0.0.1:2024/health";
+const JULIA_HEALTH_URL = process.env.OPTIMIZER_URL
+  ? `${process.env.OPTIMIZER_URL}/health`
+  : "http://127.0.0.1:2024/health";
 
 export async function GET(): Promise<Response> {
   const t0 = Date.now();
