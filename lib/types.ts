@@ -363,6 +363,7 @@ export type OptimizerDecision = {
   explanation: string;
   solveStatus: string;
   solveDurationMs: number;
+  matrixBuildMs?: number;
   // Set by the client to indicate when the result was received
   computedAtTick: number;
 };

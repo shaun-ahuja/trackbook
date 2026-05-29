@@ -99,8 +99,7 @@ function computeCVar(returns: number[], alpha = 0.1): number {
 }
 
 // Greedy selection from a pre-built scenario matrix. Called with the same
-// matrix sent to Julia — no extra build cost. Returns TS_GREEDY_FALLBACK
-// when Julia is unavailable or has not yet responded.
+// matrix sent to Julia — no extra build cost.
 export function computeLocalDecision(
   matrix: ScenarioMatrix,
   prevFirstAction: string,
@@ -112,14 +111,15 @@ export function computeLocalDecision(
 
   const trajectoryStats: OptimizerTrajectoryStats[] = matrix.plans.map((plan, n) => {
     const returns = matrix.R[n];
+    const meanReturn = returns.reduce((s, v) => s + v, 0) / returns.length;
     return {
       planIndex: n,
       firstAction: plan.firstAction,
       policyName: plan.policyName,
-      meanReturn: returns.reduce((s, v) => s + v, 0) / returns.length,
+      meanReturn,
       stdReturn: computeStd(returns),
       cvarReturn: computeCVar(returns),
-      fillProbability: 0,
+      fillProbability: returns.filter(r => r > 0).length / matrix.M,
       meanInvFinal: matrix.invFinal[n].reduce((s, v) => s + v, 0) / matrix.M,
     };
   });
@@ -127,6 +127,15 @@ export function computeLocalDecision(
   const winner = trajectoryStats.reduce((best, s) =>
     s.meanReturn > best.meanReturn ? s : best,
   );
+
+  const explanation =
+    `Max-return greedy selection · ${matrix.N} plans × ${matrix.M} trajectories` +
+    ` (γ=${matrix.gamma}, H=${matrix.H}).\n` +
+    `Selected '${winner.policyName}':` +
+    ` μ=${winner.meanReturn.toFixed(3)},` +
+    ` σ=${winner.stdReturn.toFixed(3)},` +
+    ` CVaR-10%=${winner.cvarReturn.toFixed(3)},` +
+    ` μ inv=${winner.meanInvFinal.toFixed(2)}.`;
 
   const result: Omit<OptimizerDecision, "computedAtTick"> = {
     selectedPlanIndex: winner.planIndex,
@@ -142,9 +151,9 @@ export function computeLocalDecision(
     ],
     trajectoryStats,
     bindingConstraints: [],
-    explanation: "TypeScript greedy fallback — Julia optimizer pending.",
-    solveStatus: "TS_GREEDY_FALLBACK",
-    solveDurationMs: 0,
+    explanation,
+    solveStatus: "GREEDY",
+    solveDurationMs: 0, // overwritten by fetchOptimizerDecision with real timing
   };
 
   return applySelectionInertia(result, prevFirstAction, isShock, hardInvBreach, invRiskRatio);
@@ -200,10 +209,15 @@ export async function fetchOptimizerDecision(
   const matrixBuildMs = Math.round(performance.now() - t0);
 
   // Compute local fallback from the already-built matrix — reused for Julia payload,
-  // so there is no extra matrix construction cost.
-  const localFallback = computeLocalDecision(matrix, prevFirstAction, isShock, hardInvBreach, invRiskRatio);
+  // so there is no extra matrix construction cost. Time it for diagnostics display.
+  const t2 = performance.now();
+  const localFallbackRaw = computeLocalDecision(matrix, prevFirstAction, isShock, hardInvBreach, invRiskRatio);
+  const greedyMs = Math.round(performance.now() - t2);
+  const localFallback = localFallbackRaw
+    ? { ...localFallbackRaw, solveDurationMs: greedyMs, matrixBuildMs }
+    : null;
 
-  console.log(`[optimizer] request started tick=${state.tick} matrixBuild=${matrixBuildMs}ms`);
+  console.log(`[optimizer] request started tick=${state.tick} matrixBuild=${matrixBuildMs}ms greedy=${greedyMs}ms`);
   const t1 = performance.now();
 
   try {

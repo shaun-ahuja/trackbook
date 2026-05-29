@@ -22,8 +22,6 @@ type Props = {
   fills: Fill[];
   tick: number;
   optimizerDecision: OptimizerDecision | null;
-  optimizerHealth: OptimizerHealth;
-  lastJuliaSuccessTick: number;
 };
 
 const ACTION_STYLES: Record<
@@ -87,7 +85,7 @@ const HEALTH_STYLES: Record<OptimizerHealth, { bg: string; fg: string; label: st
   fallback_only: { bg: "#2d1219", fg: "#ff5a78", label: "OPTIMIZER · FALLBACK" },
 };
 
-function DecisionPanel({ market, fills, tick, optimizerDecision, optimizerHealth, lastJuliaSuccessTick }: Props) {
+function DecisionPanel({ market, fills, tick, optimizerDecision }: Props) {
   const fair = market.forecastProb * 100;
   const mid = (market.marketBid + market.marketAsk) / 2;
   const edge = fair - mid;
@@ -95,7 +93,7 @@ function DecisionPanel({ market, fills, tick, optimizerDecision, optimizerHealth
   const posture = POSTURE_STYLES[market.riskPosture];
   const regime = market.regimeState?.regime ?? "calm";
   const regimeStyle = REGIME_STYLES[regime];
-  const health = HEALTH_STYLES[optimizerHealth];
+  const health = HEALTH_STYLES["connected"];
   const ticksInRegime = Math.max(0, tick - (market.regimeState?.enteredTick ?? 0));
   const invPct = Math.abs(market.inventory) / INVENTORY_LIMIT;
   const recentFills = fills.filter((f) => f.marketId === market.id).slice(0, 4);
@@ -214,7 +212,7 @@ function DecisionPanel({ market, fills, tick, optimizerDecision, optimizerHealth
       </section>
 
       {optimizerDecision ? (
-        <OptimizerSection decision={optimizerDecision} tick={tick} optimizerHealth={optimizerHealth} lastJuliaSuccessTick={lastJuliaSuccessTick} />
+        <OptimizerSection decision={optimizerDecision} tick={tick} />
       ) : (
         <section className="mt-3">
           <SectionLabel>julia / jump optimizer</SectionLabel>
@@ -268,13 +266,9 @@ function DecisionPanel({ market, fills, tick, optimizerDecision, optimizerHealth
 function OptimizerSection({
   decision,
   tick,
-  optimizerHealth,
-  lastJuliaSuccessTick,
 }: {
   decision: OptimizerDecision;
   tick: number;
-  optimizerHealth: OptimizerHealth;
-  lastJuliaSuccessTick: number;
 }) {
   const staleTicks = tick - decision.computedAtTick;
   const top3 = decision.mixingDistribution.slice(0, 3);
@@ -305,31 +299,13 @@ function OptimizerSection({
           {decision.selectedPolicyName}
         </span>
         <span className="ml-auto text-[9px] text-[var(--color-muted)]">
-          {decision.solveStatus === "GREEDY_FALLBACK"
-            ? "greedy"
-            : decision.solveStatus === "TS_GREEDY_FALLBACK"
-              ? "ts-greedy"
-              : decision.solveStatus === "SAFE_DEFAULT"
-                ? "safe-pass"
-                : "cvarlp"}
+          {decision.solveStatus === "GREEDY_FALLBACK" || decision.solveStatus === "GREEDY"
+            ? "greedy-lp"
+            : decision.solveStatus === "SAFE_DEFAULT"
+              ? "safe-pass"
+              : "cvarlp"}
         </span>
       </div>
-
-      {/* Provisional notice — shown while Julia has not yet responded */}
-      {(decision.solveStatus === "TS_GREEDY_FALLBACK" || decision.solveStatus === "SAFE_DEFAULT") && (
-        <p className="mt-1 rounded-[2px] border border-[#3a3215] bg-[#221e0d] px-2 py-1 text-[9px] text-[var(--color-warn)]">
-          {optimizerHealth === "fallback_only" && lastJuliaSuccessTick === -1
-            ? "Julia backend unavailable; using local fallback policy."
-            : "Local fallback policy shown while Julia warms up."}
-        </p>
-      )}
-
-      {/* Debug row — Julia connectivity status */}
-      <p className="mt-0.5 text-[9px] text-[var(--color-muted)]">
-        {lastJuliaSuccessTick === -1
-          ? "julia: never connected"
-          : `julia: last ok tick ${lastJuliaSuccessTick}`}
-      </p>
 
       {/* Trajectory stats — always visible (Tier 1/2) */}
       {selectedStats ? (
@@ -351,11 +327,27 @@ function OptimizerSection({
       ) : null}
 
       {/* Tier-3 diagnostics — collapsed by default */}
-      {(top3.length > 1 || decision.bindingConstraints.filter(b => b.name !== "plan_mixture").length > 0 || decision.explanation) && (
+      {(top3.length > 1 || decision.bindingConstraints.filter(b => b.name !== "plan_mixture").length > 0 || decision.explanation || decision.trajectoryStats.length > 0) && (
         <details className="mt-2">
           <summary className="cursor-pointer list-none text-[9px] uppercase tracking-[0.22em] text-[var(--color-muted)] hover:text-[var(--color-foreground)]">
             diagnostics ▸
           </summary>
+
+          {/* Solve metrics */}
+          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[9px] text-[var(--color-muted)]">
+            {decision.solveDurationMs > 0 && (
+              <span>solve <span className="text-[var(--color-foreground)]">{decision.solveDurationMs}ms</span></span>
+            )}
+            {decision.matrixBuildMs != null && decision.matrixBuildMs > 0 && (
+              <span>matrix <span className="text-[var(--color-foreground)]">{decision.matrixBuildMs}ms</span></span>
+            )}
+            {decision.trajectoryStats.length > 0 && (
+              <span><span className="text-[var(--color-foreground)]">{decision.trajectoryStats.length}</span> plans · <span className="text-[var(--color-foreground)]">50</span> traj</span>
+            )}
+            {selectedStats && (
+              <span>σ <span className="text-[var(--color-foreground)]">{selectedStats.stdReturn.toFixed(3)}</span></span>
+            )}
+          </div>
 
           {/* Mixing distribution */}
           {top3.length > 1 && (

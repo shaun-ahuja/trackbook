@@ -22,8 +22,6 @@ export default function Terminal() {
     selected,
     latestEvent,
     optimizerDecision,
-    optimizerHealth,
-    lastJuliaSuccessTick,
     activeScenario,
     selectMarket,
     togglePause,
@@ -126,7 +124,7 @@ export default function Terminal() {
           <MarketDetail market={selected} now={state.now} />
         </div>
         <div data-tour-id="decision" style={{ gridArea: "decision" }} className="min-h-0">
-          <DecisionPanel market={selected} fills={state.fills} tick={state.tick} optimizerDecision={optimizerDecision} optimizerHealth={optimizerHealth} lastJuliaSuccessTick={lastJuliaSuccessTick} />
+          <DecisionPanel market={selected} fills={state.fills} tick={state.tick} optimizerDecision={optimizerDecision} />
         </div>
         <div data-tour-id="forecast" style={{ gridArea: "forecast" }} className="min-h-0">
           <ForecastPanel market={selected} now={state.now} />

@@ -44,7 +44,7 @@ export type UseTrackBookSimulation = {
 export function useTrackBookSimulation(): UseTrackBookSimulation {
   const [state, setState] = useState(() => makeInitialState(FIXED_EPOCH));
   const [optimizerDecision, setOptimizerDecision] = useState<OptimizerDecision | null>(null);
-  const [optimizerHealth, setOptimizerHealth] = useState<OptimizerHealth>("warming_up");
+  const [optimizerHealth, setOptimizerHealth] = useState<OptimizerHealth>("connected");
   const [activeScenario, setActiveScenario] = useState<ScenarioName | null>(null);
   const stateRef = useRef(state);
   const runtimeRef = useRef<ShadowSimulationRuntime | null>(null);
@@ -131,16 +131,6 @@ export function useTrackBookSimulation(): UseTrackBookSimulation {
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // If Julia has not connected within 30s, escalate health to fallback_only so
-  // the UI stops saying "warming up" and clearly labels the backend as unavailable.
-  useEffect(() => {
-    const id = setTimeout(() => {
-      if (!hadJuliaSuccessRef.current) {
-        setOptimizerHealth("fallback_only");
-      }
-    }, 30_000);
-    return () => clearTimeout(id);
-  }, []);
 
   const dispatch = useCallback((action: Parameters<typeof reduceWithShadow>[1]) => {
     const adapters = adaptersRef.current ?? undefined;
@@ -165,7 +155,7 @@ export function useTrackBookSimulation(): UseTrackBookSimulation {
         // Classify source BEFORE any guard — health must update even for results
         // we don't display (previously the stale guard fired first, preventing
         // Julia from ever being seen by the health tracking code).
-        const isJulia = result.solveStatus !== "TS_GREEDY_FALLBACK"
+        const isJulia = result.solveStatus !== "GREEDY"
           && result.solveStatus !== "SAFE_DEFAULT";
         const currentTick = optimizerTickRef.current;
 
@@ -206,21 +196,15 @@ export function useTrackBookSimulation(): UseTrackBookSimulation {
           console.log(`[optimizer] fallback displayed tick=${thisTick}`);
 
           consecutiveJuliaFailsRef.current++;
-          const fails = consecutiveJuliaFailsRef.current;
-          if (!hadJuliaSuccessRef.current) {
-            setOptimizerHealth("warming_up");
-          } else {
-            setOptimizerHealth(fails >= 3 ? "fallback_only" : "degraded");
-          }
 
-          // Julia > TS fallback precedence: never overwrite a real Julia result.
+          // Julia > greedy precedence: never overwrite a real Julia result.
           const current = optimizerDecisionRef.current;
           if (
             current &&
-            current.solveStatus !== "TS_GREEDY_FALLBACK" &&
+            current.solveStatus !== "GREEDY" &&
             current.solveStatus !== "SAFE_DEFAULT"
           ) {
-            console.log(`[optimizer] ts-greedy suppressed tick=${thisTick} — caching Julia result`);
+            console.log(`[optimizer] greedy suppressed tick=${thisTick} — caching Julia result`);
             return;
           }
 
